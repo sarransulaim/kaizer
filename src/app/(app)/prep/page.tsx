@@ -1,0 +1,148 @@
+import { ChefHat } from 'lucide-react'
+import Link from 'next/link'
+
+import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
+import { getOrdersForDate, getPrepSummary } from '@/lib/orders/queries'
+import { dayLabel, formatDateLong, formatTime, today, upcomingServiceDates } from '@/lib/time'
+import { cn } from '@/lib/utils'
+
+export const dynamic = 'force-dynamic'
+
+export const metadata = { title: 'Prep' }
+
+/**
+ * The sheet the kitchen actually cooks from: every open order for a day rolled
+ * up into totals per item and size, rather than a list someone has to add up by
+ * hand at 6am.
+ */
+export default async function PrepPage(props: PageProps<'/prep'>) {
+  const params = await props.searchParams
+  const requested = typeof params.date === 'string' ? params.date : undefined
+  const date = requested ?? today()
+
+  const [summary, orders] = await Promise.all([
+    getPrepSummary(date),
+    getOrdersForDate(date),
+  ])
+
+  const dates = upcomingServiceDates(5)
+  const live = orders.filter((o) => o.status !== 'cancelled')
+  const totalUnits = summary.reduce((sum, line) => sum + line.quantity, 0)
+
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 py-5 lg:py-8">
+      <header className="mb-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Prep sheet</h1>
+        <p className="text-ink-faint text-sm">{formatDateLong(date)}</p>
+      </header>
+
+      <div className="mb-5 flex flex-wrap gap-2">
+        {[{ date: today(), label: 'Today' }, ...dates.filter((d) => d.date !== today())].map(
+          ({ date: option, label }) => (
+            <Link
+              key={option}
+              href={`/prep?date=${option}`}
+              className={cn(
+                'flex h-9 items-center rounded-lg px-3 text-sm font-medium ring-1 transition',
+                option === date
+                  ? 'bg-accent text-accent-ink ring-accent'
+                  : 'bg-surface-raised text-ink-muted ring-line hover:text-ink',
+              )}
+            >
+              {label}
+            </Link>
+          ),
+        )}
+      </div>
+
+      {summary.length === 0 ? (
+        <div className="rounded-card bg-surface ring-line/70 px-6 py-12 text-center ring-1">
+          <ChefHat className="text-ink-faint mx-auto size-8" />
+          <p className="mt-3 font-medium">Nothing to prep</p>
+          <p className="text-ink-faint mt-1 text-sm">
+            No orders on the books for {dayLabel(date).toLowerCase()}.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Cook list · {totalUnits} unit{totalUnits === 1 ? '' : 's'}
+              </CardTitle>
+            </CardHeader>
+            <CardBody>
+              <ul className="divide-line/50 divide-y">
+                {summary.map((line) => (
+                  <li
+                    key={`${line.itemName}-${line.sizeLabel}`}
+                    className="flex items-center gap-3 py-3"
+                  >
+                    <span className="tabular text-accent w-10 shrink-0 text-xl font-bold">
+                      {line.quantity}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium">{line.itemName}</span>
+                      <span className="text-ink-faint text-xs">{line.sizeLabel}</span>
+                    </span>
+                    <span className="text-ink-faint tabular shrink-0 text-xs">
+                      across {line.orderCount} order{line.orderCount === 1 ? '' : 's'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Service times</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <ul className="divide-line/50 divide-y">
+                {live.map((order) => (
+                  <li key={order.id} className="flex items-center gap-3 py-2.5 text-sm">
+                    <span className="tabular w-20 shrink-0 font-medium">
+                      {formatTime(order.serviceTime)}
+                    </span>
+                    <Link
+                      href={`/orders/${order.id}`}
+                      className="hover:text-accent min-w-0 flex-1 truncate transition"
+                    >
+                      {order.customer.name}
+                    </Link>
+                    <span className="text-ink-faint shrink-0 text-xs capitalize">
+                      {order.fulfillmentType.replace('_', '-')}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </CardBody>
+          </Card>
+
+          {live.some((o) => o.notes) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Kitchen notes</CardTitle>
+              </CardHeader>
+              <CardBody className="space-y-2">
+                {live
+                  .filter((o) => o.notes)
+                  .map((order) => (
+                    <div key={order.id} className="text-sm">
+                      <span className="text-ink-faint text-xs">
+                        {order.customer.name} · {formatTime(order.serviceTime)}
+                      </span>
+                      <p className="mt-0.5 rounded-md bg-amber-500/10 px-3 py-2 text-amber-200">
+                        {order.notes}
+                      </p>
+                    </div>
+                  ))}
+              </CardBody>
+            </Card>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

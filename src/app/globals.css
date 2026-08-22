@@ -1,0 +1,94 @@
+@import 'tailwindcss';
+
+/*
+  Kaizr ops theme.
+
+  Committed dark palette rather than a light/dark pair: this is a tool used on
+  phones in a kitchen and on an always-on wall tablet, where a bright white
+  screen is actively unpleasant. Neutrals carry a warm tint so the saffron
+  accent sits naturally against them rather than looking bolted on.
+*/
+
+@theme {
+  --color-canvas: oklch(0.17 0.008 60);
+  --color-surface: oklch(0.22 0.009 60);
+  --color-surface-raised: oklch(0.26 0.01 60);
+  --color-line: oklch(0.32 0.012 60);
+  --color-line-strong: oklch(0.42 0.015 60);
+
+  --color-ink: oklch(0.96 0.005 80);
+  --color-ink-muted: oklch(0.74 0.012 70);
+  --color-ink-faint: oklch(0.58 0.012 70);
+
+  /* Saffron — the one accent, used for primary actions and focus. */
+  --color-accent: oklch(0.78 0.16 72);
+  --color-accent-strong: oklch(0.72 0.18 65);
+  --color-accent-ink: oklch(0.2 0.03 70);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --radius-card: 0.875rem;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color-scheme: dark;
+    /* Stops iOS zooming the page when a form field is focused. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    /* Prevents rubber-band scroll revealing white behind the PWA shell. */
+    overscroll-behavior-y: none;
+  }
+
+  /* Money and counts must not jitter as digits change on the live board. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Native controls inherit the dark theme instead of rendering light. */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  input[type='date'],
+  input[type='time'] {
+    /* Makes the iOS/Chrome picker glyphs visible on a dark field. */
+    color-scheme: dark;
+  }
+}
+
+@layer utilities {
+  /* Home-screen PWAs render under the notch and the home indicator. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mb-safe {
+    margin-bottom: env(safe-area-inset-bottom);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
