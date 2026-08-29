@@ -31,8 +31,9 @@ export type ActionResult<T = void> =
 
 /** Refresh every surface an order can appear on. */
 function revalidateOrderViews(orderId?: string) {
+  /* The dashboard carries today, upcoming and all-orders on one route now, so
+     revalidating '/' covers all three views. */
   revalidatePath('/')
-  revalidatePath('/upcoming')
   revalidatePath('/prep')
   revalidatePath('/kitchen')
   if (orderId) revalidatePath(`/orders/${orderId}`)

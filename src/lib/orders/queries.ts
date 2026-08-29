@@ -1,6 +1,7 @@
-import { and, asc, desc, eq, gte, inArray, lte, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, lt, lte, ne, or, sql } from 'drizzle-orm'
 import { cache } from 'react'
 
+import { UPCOMING_WINDOW_DAYS } from '@/lib/config'
 import { db } from '@/lib/db'
 import {
   customers,
@@ -9,8 +10,8 @@ import {
   orderItems,
   orders,
 } from '@/lib/db/schema'
-import { addDays, today } from '@/lib/time'
-import { ACTIVE_STATUSES } from './status'
+import { addDays, endOfMonth, startOfMonth, today } from '@/lib/time'
+import { ACTIVE_STATUSES, TERMINAL_STATUSES } from './status'
 
 /* -------------------------------------------------------------------------- */
 /*                                    Menu                                    */
@@ -171,25 +172,41 @@ export async function searchCustomers(query: string, limit = 8) {
 export type PrepLine = {
   itemName: string
   sizeLabel: string
+  /** Still to be made. The number the kitchen actually cooks to. */
   quantity: number
+  /** Already gone out, on orders that have been completed. */
+  doneQuantity: number
+  /** Everything the day asked for, made or not. */
+  totalQuantity: number
+  /** How many still-open orders are waiting on this line. */
   orderCount: number
 }
 
 /**
- * What the kitchen actually needs to cook for a given day: quantities rolled up
- * across every open order, rather than a list the chef has to add up by hand.
- * Cancelled orders are excluded; completed ones are kept so the sheet still
- * reflects the full day's production.
+ * What the kitchen still needs to cook for a given day.
+ *
+ * `quantity` counts only orders that are not yet completed, so a tray drops off
+ * the cook list the moment its order is closed out — mid-service the sheet is
+ * being asked "what is left to make", and a number that includes food already
+ * handed over is worse than useless.
+ *
+ * The day's full production is carried alongside as `totalQuantity` so a line
+ * can show "6 of 8 made" rather than appearing to shrink for no reason, and so
+ * the morning prep sheet still reflects the whole day.
  */
 export async function getPrepSummary(isoDate: string): Promise<PrepLine[]> {
+  const pending = sql`${orders.status} NOT IN ('completed', 'cancelled')`
+  const done = sql`${orders.status} = 'completed'`
+  const billable = sql`${orders.status} <> 'cancelled'`
+
   const rows = await db
     .select({
       itemName: orderItems.itemNameSnapshot,
       sizeLabel: orderItems.sizeLabelSnapshot,
-      quantity: sql<number>`SUM(${orderItems.quantity})::int`,
-      orderCount: sql<number>`COUNT(DISTINCT ${orders.id})::int`,
-      sortKey: sql<number>`MIN(COALESCE(${menuItems.sortOrder}, 999))`,
-      variantSort: sql<number>`MIN(COALESCE(${menuVariants.sortOrder}, 999))`,
+      quantity: sql<number>`(COALESCE(SUM(${orderItems.quantity}) FILTER (WHERE ${pending}), 0))::int`,
+      doneQuantity: sql<number>`(COALESCE(SUM(${orderItems.quantity}) FILTER (WHERE ${done}), 0))::int`,
+      totalQuantity: sql<number>`(COALESCE(SUM(${orderItems.quantity}) FILTER (WHERE ${billable}), 0))::int`,
+      orderCount: sql<number>`(COUNT(DISTINCT ${orders.id}) FILTER (WHERE ${pending}))::int`,
     })
     .from(orderItems)
     .innerJoin(orders, eq(orderItems.orderId, orders.id))
@@ -202,12 +219,7 @@ export async function getPrepSummary(isoDate: string): Promise<PrepLine[]> {
       asc(sql`MIN(COALESCE(${menuVariants.sortOrder}, 999))`),
     )
 
-  return rows.map(({ itemName, sizeLabel, quantity, orderCount }) => ({
-    itemName,
-    sizeLabel,
-    quantity,
-    orderCount,
-  }))
+  return rows
 }
 
 /** Per-day order count and revenue, for the upcoming view's day headers. */
@@ -229,4 +241,200 @@ export async function getDayTotals(fromDate: string, toDate: string) {
     )
     .groupBy(orders.serviceDate)
     .orderBy(asc(orders.serviceDate))
+}
+
+/* -------------------------------------------------------------------------- */
+/*                               Kitchen board                                */
+/* -------------------------------------------------------------------------- */
+
+export type ItemTotal = {
+  itemName: string
+  sizeLabel: string
+  /** Still to be made — completed orders have dropped off. */
+  quantity: number
+  doneQuantity: number
+  totalQuantity: number
+  /** Still-open orders waiting on this line. */
+  orderCount: number
+}
+
+/**
+ * Roll a set of orders up into per-item, per-size totals.
+ *
+ * Deliberately computed in JS from the very array the cards are rendered from,
+ * rather than by a second aggregate query. The kitchen display prints these
+ * totals directly above the orders they came from, and an independent query
+ * could disagree with the list underneath it the moment a status changed
+ * between the two round trips.
+ */
+export function rollUpItems(list: OrderWithItems[]): ItemTotal[] {
+  const totals = new Map<string, ItemTotal>()
+
+  for (const order of list) {
+    if (order.status === 'cancelled') continue
+
+    /* Completed orders stop counting toward what is left to cook, but stay in
+       the day's total so the board can show "6 of 8 made". */
+    const outstanding = order.status !== 'completed'
+
+    /* An order carrying two lines of the same item and size still counts once
+       toward `orderCount` - it means "how many orders want this", not "how many
+       lines mention it". */
+    const counted = new Set<string>()
+
+    for (const item of order.items) {
+      const key = `${item.itemNameSnapshot} / ${item.sizeLabelSnapshot}`
+      const existing = totals.get(key)
+
+      if (existing) {
+        existing.totalQuantity += item.quantity
+        if (outstanding) {
+          existing.quantity += item.quantity
+          if (!counted.has(key)) existing.orderCount += 1
+        } else {
+          existing.doneQuantity += item.quantity
+        }
+      } else {
+        totals.set(key, {
+          itemName: item.itemNameSnapshot,
+          sizeLabel: item.sizeLabelSnapshot,
+          quantity: outstanding ? item.quantity : 0,
+          doneQuantity: outstanding ? 0 : item.quantity,
+          totalQuantity: item.quantity,
+          orderCount: outstanding ? 1 : 0,
+        })
+      }
+
+      counted.add(key)
+    }
+  }
+
+  return [...totals.values()].sort(
+    (a, b) =>
+      b.quantity - a.quantity ||
+      b.totalQuantity - a.totalQuantity ||
+      a.itemName.localeCompare(b.itemName),
+  )
+}
+
+/**
+ * Everything the wall display should show, in one pass: today's orders, plus
+ * anything still open from an earlier day so a forgotten order cannot quietly
+ * scroll off the board when the date rolls over.
+ */
+export async function getKitchenBoard() {
+  const date = today()
+
+  const scoped = await db.query.orders.findMany({
+    where: or(
+      eq(orders.serviceDate, date),
+      and(inArray(orders.status, ACTIVE_STATUSES), lt(orders.serviceDate, date)),
+    ),
+    orderBy: [asc(orders.serviceAt)],
+    with: orderWith(),
+  })
+
+  const todays = scoped.filter((o) => o.serviceDate === date)
+
+  return {
+    date,
+    overdue: scoped.filter((o) => o.serviceDate < date),
+    live: todays.filter((o) => !TERMINAL_STATUSES.includes(o.status)),
+    done: todays.filter((o) => o.status === 'completed'),
+    cancelled: todays.filter((o) => o.status === 'cancelled'),
+    /* Totals cover the whole day's production - completed included, cancelled
+       excluded - so the board shows what has to be made in total, not merely
+       what is left to start. */
+    totals: rollUpItems(todays),
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                             Dashboard snapshot                             */
+/* -------------------------------------------------------------------------- */
+
+export type DashboardSnapshot = {
+  todayOrders: number
+  todayOpen: number
+  todayRevenueCents: number
+  todayUnpaidCents: number
+  upcomingOrders: number
+  upcomingRevenueCents: number
+  monthOrders: number
+  monthRevenueCents: number
+  totalOrders: number
+  openOrders: number
+  overdueOrders: number
+  outstandingCents: number
+}
+
+const EMPTY_SNAPSHOT: DashboardSnapshot = {
+  todayOrders: 0,
+  todayOpen: 0,
+  todayRevenueCents: 0,
+  todayUnpaidCents: 0,
+  upcomingOrders: 0,
+  upcomingRevenueCents: 0,
+  monthOrders: 0,
+  monthRevenueCents: 0,
+  totalOrders: 0,
+  openOrders: 0,
+  overdueOrders: 0,
+  outstandingCents: 0,
+}
+
+/**
+ * Every headline figure on the dashboard in a single round trip.
+ *
+ * Aggregate `FILTER` clauses rather than a dozen separate counts: one scan of
+ * `orders` answers all of it, and because every figure comes from the same
+ * snapshot they cannot contradict each other the way independent queries run
+ * milliseconds apart can.
+ */
+export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
+  const date = today()
+  const upcomingFrom = addDays(date, 1)
+  const upcomingTo = addDays(date, UPCOMING_WINDOW_DAYS)
+  const monthFrom = startOfMonth()
+  const monthTo = endOfMonth()
+
+  const active = sql.join(
+    ACTIVE_STATUSES.map((status) => sql`${status}`),
+    sql`, `,
+  )
+  const billable = sql`${orders.status} <> 'cancelled'`
+  const balance = sql`${orders.totalCents} - ${orders.amountPaidCents}`
+  const isToday = sql`${orders.serviceDate} = ${date}`
+  const inMonth = sql`${orders.serviceDate} BETWEEN ${monthFrom} AND ${monthTo}`
+  const isUpcoming = sql`${orders.serviceDate} BETWEEN ${upcomingFrom} AND ${upcomingTo}`
+  const isActive = sql`${orders.status} IN (${active})`
+
+  const [row] = await db
+    .select({
+      todayOrders: sql<number>`(COUNT(*) FILTER (WHERE ${isToday} AND ${billable}))::int`,
+      todayOpen: sql<number>`(COUNT(*) FILTER (WHERE ${isToday} AND ${isActive}))::int`,
+      todayRevenueCents: sql<number>`(COALESCE(SUM(${orders.totalCents}) FILTER (WHERE ${isToday} AND ${billable}), 0))::int`,
+      todayUnpaidCents: sql<number>`(COALESCE(SUM(${balance}) FILTER (WHERE ${isToday} AND ${billable}), 0))::int`,
+      upcomingOrders: sql<number>`(COUNT(*) FILTER (WHERE ${isUpcoming} AND ${billable}))::int`,
+      upcomingRevenueCents: sql<number>`(COALESCE(SUM(${orders.totalCents}) FILTER (WHERE ${isUpcoming} AND ${billable}), 0))::int`,
+      monthOrders: sql<number>`(COUNT(*) FILTER (WHERE ${inMonth} AND ${billable}))::int`,
+      monthRevenueCents: sql<number>`(COALESCE(SUM(${orders.totalCents}) FILTER (WHERE ${inMonth} AND ${billable}), 0))::int`,
+      totalOrders: sql<number>`(COUNT(*) FILTER (WHERE ${billable}))::int`,
+      openOrders: sql<number>`(COUNT(*) FILTER (WHERE ${isActive}))::int`,
+      overdueOrders: sql<number>`(COUNT(*) FILTER (WHERE ${isActive} AND ${orders.serviceDate} < ${date}))::int`,
+      outstandingCents: sql<number>`(COALESCE(SUM(${balance}) FILTER (WHERE ${billable}), 0))::int`,
+    })
+    .from(orders)
+
+  return row ?? EMPTY_SNAPSHOT
+}
+
+/** Most recent orders across every date, for the dashboard's "All" view. */
+export async function getRecentOrders(limit = 40, offset = 0) {
+  return db.query.orders.findMany({
+    orderBy: [desc(orders.serviceAt)],
+    limit,
+    offset,
+    with: orderWith(),
+  })
 }

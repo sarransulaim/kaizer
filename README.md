@@ -1,6 +1,6 @@
 # Kaizr Orders
 
-Catering order tracker for Kaizr — Hyderabadi weekend orders.
+Catering order tracker for Kaizr — Hyderabadi catering, seven days a week.
 
 Orders still arrive over WhatsApp and the Google Form. This app is where they
 get recorded, tracked through the kitchen, and closed out. Stage 1 of a wider
@@ -59,17 +59,22 @@ and the Push API require HTTPS or `localhost`, so a LAN IP will not work.
 | `npm run db:backup` | Timestamped `pg_dump` into `backups/` |
 | `npm run icons` | Regenerate the PWA icon set |
 
+`node scripts/seed-demo-orders.mjs` fills a local database with a realistic book
+so the dashboard, kitchen and analytics have something to render; `--clear`
+removes exactly what it created. Local only — never run it against production.
+
 ## Routes
 
 | | |
 |---|---|
-| `/` | Today's board — live orders, stats, overdue warnings |
-| `/upcoming` | Everything booked, grouped by day |
-| `/prep` | Aggregated cook list for a chosen day |
+| `/` | Dashboard — headline figures, plus Today / Upcoming / All in one list |
+| `/upcoming` | Redirect to `/?view=upcoming`, kept for the installed PWA |
+| `/prep` | Aggregated cook list for a chosen day, counting down as orders close |
+| `/analytics` | Sales, items, days, payments and customers over a chosen range |
 | `/orders/new` | Order entry |
 | `/orders/[id]` | Order detail, payment, audit history |
 | `/kitchen` | Wall-tablet display (no navigation, wake lock) |
-| `/settings` | Notifications, menu reference, access status |
+| `/settings` | Notifications, menu editing, access status |
 | `/api/stream` | SSE feed of order changes |
 | `/api/cron` | Notification scheduler tick (needs `CRON_SECRET`) |
 | `/api/health` | Health check, verifies database reachability |
@@ -96,6 +101,28 @@ history.
 
 ⚠️ **There is currently no login.** Anyone with the URL can read and edit every
 order, including customer names and phone numbers.
+
+**Booked and collected are reported separately.** A catering book runs on
+deposits, so "we sold $4,000" and "we have $4,000" are rarely the same number.
+Every revenue figure on `/analytics` says which one it is, and the gap between
+them is surfaced as outstanding rather than averaged away. Cancelled orders
+never count toward revenue — they are reported once, on their own.
+
+**The cook list counts down.** `getPrepSummary` counts only orders that are not
+yet completed, so a tray drops off the prep sheet, the kitchen wall and the
+dashboard card the moment its order is closed out. The day's full production
+stays alongside it ("6 of 11 left") so a line never appears to shrink for no
+reason.
+
+**The menu is edited in the app, not in the seed.** Items, sizes and prices are
+managed from Settings. Anything already referenced by an order line can only be
+turned off, never deleted — `order_items` points at `menu_variants` with
+`ON DELETE RESTRICT` so the reporting join stays intact, and the interface says
+so rather than letting the database raise it.
+
+**Kitchen totals and kitchen cards come from one query.** The wall display rolls
+its per-item totals up in JS from the same array of orders it renders below
+them, so the number on the wall can never disagree with the cards under it.
 
 **Notifications are deduplicated by key.** The scheduler re-evaluates the same
 orders on every tick, so each alert is claimed via a unique `dedupe_key` before

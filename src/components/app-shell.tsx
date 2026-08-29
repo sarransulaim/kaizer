@@ -1,6 +1,13 @@
 'use client'
 
-import { CalendarDays, ChefHat, ListChecks, Plus, Settings } from 'lucide-react'
+import {
+  BarChart3,
+  ChefHat,
+  ClipboardList,
+  LayoutDashboard,
+  Plus,
+  Settings,
+} from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
@@ -11,9 +18,10 @@ import { cn } from '@/lib/utils'
 import { ConnectionDot, RealtimeProvider } from './realtime-refresh'
 
 const NAV = [
-  { href: '/', label: 'Today', icon: ListChecks },
-  { href: '/upcoming', label: 'Upcoming', icon: CalendarDays },
-  { href: '/prep', label: 'Prep', icon: ChefHat },
+  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/prep', label: 'Prep', icon: ClipboardList },
+  { href: '/kitchen', label: 'Kitchen', icon: ChefHat },
+  { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/settings', label: 'Settings', icon: Settings },
 ] as const
 
@@ -63,15 +71,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           ))}
 
-          <Link
-            href="/kitchen"
-            className="text-ink-faint hover:text-ink mt-auto flex h-11 items-center gap-3 rounded-lg px-3 text-sm transition"
-          >
-            <ChefHat className="size-4.5" />
-            Kitchen display
-          </Link>
-
-          <ConnectionDot className="px-3 pt-1" />
+          <ConnectionDot className="mt-auto px-3 pt-1" />
         </aside>
 
         {/* Mobile header */}
@@ -103,7 +103,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         {/* Mobile bottom tabs */}
         <nav className="bg-canvas/90 ring-line/60 pb-safe fixed inset-x-0 bottom-0 z-20 ring-1 backdrop-blur lg:hidden">
-          <div className="grid grid-cols-4">
+          <div className="grid grid-cols-5">
             {NAV.map(({ href, label, icon: Icon }) => {
               const active = isActive(pathname, href)
               return (

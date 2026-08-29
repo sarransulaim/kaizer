@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon'
 
-import { BUSINESS } from './config'
+import { BUSINESS, DAY_CHIP_COUNT } from './config'
 
 const ZONE = BUSINESS.timezone
 
@@ -65,11 +65,6 @@ export function dayLabel(isoDate: string): string {
   return target.toFormat('ccc, LLL d')
 }
 
-/** Weekday number, Mon=1 … Sun=7. */
-export function weekdayOf(isoDate: string): number {
-  return DateTime.fromISO(isoDate, { zone: ZONE }).weekday
-}
-
 /** "in 2h 15m" / "25m ago" — relative to now, for the today board. */
 export function relativeToNow(instant: Date): string {
   const target = DateTime.fromJSDate(instant).setZone(ZONE)
@@ -91,23 +86,44 @@ export function minutesUntil(instant: Date): number {
 }
 
 /**
- * The next few service days (Fri/Sat/Sun), starting from today. Surfaced as
- * one-tap chips on the order form — the overwhelming majority of orders are
- * for the coming weekend, so typing a date should be the exception.
+ * The next `count` calendar days, starting with today. Surfaced as one-tap
+ * chips on the order form and the prep sheet. The kitchen serves every day of
+ * the week, so every day is offered and typing a date is the exception.
  */
-export function upcomingServiceDates(count = 4): { date: string; label: string }[] {
-  const results: { date: string; label: string }[] = []
-  let cursor = DateTime.now().setZone(ZONE).startOf('day')
+export function upcomingDays(
+  count = DAY_CHIP_COUNT,
+): { date: string; label: string }[] {
+  const start = DateTime.now().setZone(ZONE).startOf('day')
 
-  for (let i = 0; results.length < count && i < 21; i++) {
-    if (BUSINESS.serviceDays.includes(cursor.weekday)) {
-      const iso = cursor.toISODate()!
-      results.push({ date: iso, label: dayLabel(iso) })
-    }
-    cursor = cursor.plus({ days: 1 })
-  }
+  return Array.from({ length: Math.max(count, 0) }, (_, offset) => {
+    const iso = start.plus({ days: offset }).toISODate()!
+    return { date: iso, label: dayLabel(iso) }
+  })
+}
 
-  return results
+/** First day of the current month in the business timezone, as `YYYY-MM-DD`. */
+export function startOfMonth(): string {
+  return DateTime.now().setZone(ZONE).startOf('month').toISODate()!
+}
+
+/** Last day of the current month in the business timezone, as `YYYY-MM-DD`. */
+export function endOfMonth(): string {
+  return DateTime.now().setZone(ZONE).endOf('month').toISODate()!
+}
+
+/** "August 2026" — the heading for month-to-date figures. */
+export function monthLabel(): string {
+  return DateTime.now().setZone(ZONE).toFormat('LLLL yyyy')
+}
+
+/** "23" — the day number alone, for a dense axis where the month is in the title. */
+export function dayOfMonth(isoDate: string): string {
+  return DateTime.fromISO(isoDate, { zone: ZONE }).toFormat('d')
+}
+
+/** "Aug 23" */
+export function shortDate(isoDate: string): string {
+  return DateTime.fromISO(isoDate, { zone: ZONE }).toFormat('LLL d')
 }
 
 /** Current local clock time as `HH:mm`, for defaulting form inputs. */

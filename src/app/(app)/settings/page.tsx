@@ -1,23 +1,25 @@
 import { ShieldAlert } from 'lucide-react'
 
 import { PushManager } from '@/components/push-manager'
+import { MenuEditor } from '@/components/settings/menu-editor'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { BUSINESS } from '@/lib/config'
-import { formatCentsCompact } from '@/lib/money'
-import { getMenu } from '@/lib/orders/queries'
+import { getMenuForAdmin } from '@/lib/menu/queries'
 
 export const dynamic = 'force-dynamic'
 
 export const metadata = { title: 'Settings' }
 
 export default async function SettingsPage() {
-  const menu = await getMenu()
+  const menu = await getMenuForAdmin()
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-5 lg:py-8">
       <header className="mb-5">
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-ink-faint text-sm">{BUSINESS.name} · {BUSINESS.timezone}</p>
+        <p className="text-ink-faint text-sm">
+          {BUSINESS.name} · {BUSINESS.timezone}
+        </p>
       </header>
 
       <div className="space-y-4">
@@ -35,30 +37,12 @@ export default async function SettingsPage() {
             <CardTitle>Menu</CardTitle>
           </CardHeader>
           <CardBody>
-            <div className="space-y-3">
-              {menu.map((item) => (
-                <div key={item.id}>
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-sm font-medium">{item.name}</span>
-                    <span className="text-ink-faint text-xs">
-                      {item.prepLeadHours}h lead
-                    </span>
-                  </div>
-                  <div className="text-ink-muted mt-0.5 flex flex-wrap gap-x-3 text-xs">
-                    {item.variants.map((variant) => (
-                      <span key={variant.id} className="tabular">
-                        {variant.sizeLabel} {formatCentsCompact(variant.priceCents)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="text-ink-faint mt-4 text-xs">
-              Menu and prep lead times are seeded from{' '}
-              <code className="text-ink-muted">scripts/seed.ts</code>. Editing
-              them in-app comes in a later stage.
+            <p className="text-ink-faint mb-3 text-xs">
+              Items and prices used by the order form. Changes apply to new
+              orders only — existing orders keep the name and price they were
+              taken at.
             </p>
+            <MenuEditor items={menu} />
           </CardBody>
         </Card>
 

@@ -122,6 +122,15 @@ export const menuItems = pgTable('menu_items', {
   category: text('category').notNull().default('main'),
   description: text('description'),
   /**
+   * How the dish is actually made: ingredients, quantities, method. Free text
+   * rather than a structured ingredient table on purpose — this is the note a
+   * cook reads off the wall, not something the app calculates against, and
+   * forcing it into rows would make it slower to write and harder to read.
+   *
+   * Surfaced on the kitchen display: tapping a line on an order opens it.
+   */
+  recipe: text('recipe'),
+  /**
    * How many hours before service this item needs to be started. Drives the
    * prep-alert scheduler — mutton biryani needs a longer runway than kheer.
    */

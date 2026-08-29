@@ -37,9 +37,28 @@ const button = cva(
 
 type ButtonProps = ComponentProps<'button'> & VariantProps<typeof button>
 
-export function Button({ className, variant, size, full, ...props }: ButtonProps) {
+/**
+ * `type` defaults to "button", not the HTML default of "submit".
+ *
+ * Every button in this app runs a handler; exactly one submits a form, and it
+ * says so explicitly. Left to the HTML default, dropping any of these inside a
+ * form would silently submit it — reloading the page instead of running the
+ * action, which is close to impossible to spot in review.
+ */
+export function Button({
+  className,
+  variant,
+  size,
+  full,
+  type = 'button',
+  ...props
+}: ButtonProps) {
   return (
-    <button className={cn(button({ variant, size, full }), className)} {...props} />
+    <button
+      type={type}
+      className={cn(button({ variant, size, full }), className)}
+      {...props}
+    />
   )
 }
 
