@@ -29,8 +29,11 @@ Requires Node 20.9+ and a local PostgreSQL 18.
 npm install
 
 # Creates the kaizr_dev database and a dedicated kaizr role.
-# Prompts for your postgres superuser password.
-psql -U postgres -h localhost -p 5432 -f scripts/setup-db.sql
+# Prompts for your postgres superuser password. KAIZR_DB_PASSWORD sets the
+# password for the app's own role — use the same value you put in
+# DATABASE_URL in .env.local. It is passed in rather than written into the
+# script so that no credential is ever committed.
+KAIZR_DB_PASSWORD='choose-a-password' psql -U postgres -h localhost -p 5432 -f scripts/setup-db.sql
 
 npm run db:migrate     # apply schema
 npm run db:seed        # owner account + the live menu
