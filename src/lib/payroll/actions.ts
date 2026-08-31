@@ -8,10 +8,27 @@ import { requireSession } from '@/lib/auth/guard'
 import { db } from '@/lib/db'
 import { timeEntries, users } from '@/lib/db/schema'
 import { isValidPinFormat, verifyPin } from '@/lib/staff/pin'
-import { addDays, dateOf, startOfWeek, toServiceInstant } from '@/lib/time'
+import {
+  addDays,
+  dateOf,
+  formatInstantTime,
+  startOfWeek,
+  today,
+  toServiceInstant,
+  weekdayShort,
+} from '@/lib/time'
 
 import { minutesWorked } from './hours'
-import { getWeekMinutesForUser } from './queries'
+import { getWeekBreakdownForUser, getWeekMinutesForUser } from './queries'
+
+export type PunchDay = {
+  date: string
+  /** "Mon" — resolved here so the browser never re-derives it in another zone. */
+  weekday: string
+  minutes: number
+  open: boolean
+  isToday: boolean
+}
 
 export type PunchResult =
   | {
@@ -35,6 +52,10 @@ export type PunchResult =
        * be paid for.
        */
       lastWeekMinutes: number
+      /** "4:50 PM", the moment recorded. */
+      atLabel: string
+      /** The week day by day, so the worker can see where the hours went. */
+      week: PunchDay[]
     }
   | { ok: false; error: string }
 
@@ -93,11 +114,7 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
         .where(eq(timeEntries.id, open.id))
 
       /* Read after the write so the shift just finished is included. */
-      const monday = startOfWeek()
-      const [weekMinutes, lastWeekMinutes] = await Promise.all([
-        getWeekMinutesForUser(userId, monday),
-        getWeekMinutesForUser(userId, addDays(monday, -7)),
-      ])
+      const summary = await weekSummaryFor(userId)
 
       revalidateClock()
       return {
@@ -105,9 +122,9 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
         action: 'out',
         name: worker.name,
         at: now.toISOString(),
+        atLabel: formatInstantTime(now),
         minutes,
-        weekMinutes,
-        lastWeekMinutes,
+        ...summary,
       }
     }
 
@@ -119,11 +136,7 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
 
     /* The shift that just opened counts nothing yet, so this is what they had
        banked walking in. */
-    const monday = startOfWeek()
-    const [weekMinutes, lastWeekMinutes] = await Promise.all([
-      getWeekMinutesForUser(userId, monday),
-      getWeekMinutesForUser(userId, addDays(monday, -7)),
-    ])
+    const summary = await weekSummaryFor(userId)
 
     revalidateClock()
     return {
@@ -131,8 +144,8 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
       action: 'in',
       name: worker.name,
       at: now.toISOString(),
-      weekMinutes,
-      lastWeekMinutes,
+      atLabel: formatInstantTime(now),
+      ...summary,
     }
   } catch (error) {
     /* The one-open-shift-per-worker index rejects a double tap outright, which
@@ -144,6 +157,35 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
 
     console.error('[punch]', error)
     return { ok: false, error: 'Could not record that. Try again.' }
+  }
+}
+
+/**
+ * This week day by day, plus last week's total.
+ *
+ * Last week is carried because the payroll week starts on Monday: anyone
+ * punching in early in it sees a zero that is correct but looks like lost
+ * hours, and the previous week is the number they are about to be paid for.
+ */
+async function weekSummaryFor(userId: string) {
+  const monday = startOfWeek()
+  const now = today()
+
+  const [week, lastWeekMinutes] = await Promise.all([
+    getWeekBreakdownForUser(userId, monday),
+    getWeekMinutesForUser(userId, addDays(monday, -7)),
+  ])
+
+  return {
+    weekMinutes: week.totalMinutes,
+    lastWeekMinutes,
+    week: week.days.map((day) => ({
+      date: day.date,
+      weekday: weekdayShort(day.date),
+      minutes: day.minutes,
+      open: day.open,
+      isToday: day.date === now,
+    })),
   }
 }
 

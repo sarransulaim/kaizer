@@ -263,3 +263,66 @@ export async function getWeekMinutesForUser(
     0,
   )
 }
+
+export type WorkerDay = {
+  date: string
+  minutes: number
+  /** They are on the clock right now — this day is still accruing. */
+  open: boolean
+}
+
+export type WorkerWeek = {
+  days: WorkerDay[]
+  totalMinutes: number
+}
+
+/**
+ * One worker's week, day by day, for the card the kitchen tablet shows after a
+ * successful punch.
+ *
+ * Same rounding order as the payroll sheet — per shift, then summed — so a
+ * worker comparing the tablet against what they are paid finds the same
+ * numbers. Carries no rate and no pay: whoever is standing at the tablet can
+ * read this.
+ */
+export async function getWeekBreakdownForUser(
+  userId: string,
+  mondayIso: string,
+): Promise<WorkerWeek> {
+  const dates = weekDates(mondayIso)
+  const sunday = dates[dates.length - 1]
+
+  const rows = await db
+    .select({
+      workDate: timeEntries.workDate,
+      clockInAt: timeEntries.clockInAt,
+      clockOutAt: timeEntries.clockOutAt,
+    })
+    .from(timeEntries)
+    .where(
+      and(
+        eq(timeEntries.userId, userId),
+        gte(timeEntries.workDate, mondayIso),
+        lte(timeEntries.workDate, sunday),
+      ),
+    )
+
+  const days = dates.map((date) => {
+    const onThisDay = rows.filter((row) => row.workDate === date)
+
+    return {
+      date,
+      minutes: onThisDay.reduce(
+        (sum, row) =>
+          sum + (row.clockOutAt ? minutesWorked(row.clockInAt, row.clockOutAt) : 0),
+        0,
+      ),
+      open: onThisDay.some((row) => row.clockOutAt === null),
+    }
+  })
+
+  return {
+    days,
+    totalMinutes: days.reduce((sum, day) => sum + day.minutes, 0),
+  }
+}

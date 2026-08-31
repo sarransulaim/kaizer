@@ -4,7 +4,8 @@ import { Check, Clock, Delete, Loader2, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
 
-import { punch } from '@/lib/payroll/actions'
+import { Button } from '@/components/ui/button'
+import { punch, type PunchDay } from '@/lib/payroll/actions'
 import { formatMinutes } from '@/lib/payroll/hours'
 import { cn } from '@/lib/utils'
 
@@ -25,12 +26,24 @@ export type ClockPerson = {
   minutesOn: number | null
 }
 
-type Outcome = {
-  tone: 'in' | 'out' | 'error'
-  message: string
-  /** The week's hours, shown under the confirmation. Never pay. */
-  detail?: string
+type Summary = {
+  name: string
+  action: 'in' | 'out'
+  atLabel: string
+  /** Length of the shift just closed, on a punch out. */
+  minutes?: number
+  weekMinutes: number
+  lastWeekMinutes: number
+  week: PunchDay[]
 }
+
+/**
+ * How long the week card stays up before the tablet returns to the name list.
+ *
+ * Long enough to read properly, short enough that the next person at the pass
+ * is not left looking at a colleague's hours. Done closes it at once.
+ */
+const CARD_SECONDS = 20
 
 export function TimeClock({ people }: { people: ClockPerson[] }) {
   const router = useRouter()
@@ -38,19 +51,20 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
   const [selected, setSelected] = useState<ClockPerson | null>(null)
   const [pin, setPin] = useState('')
   const [pending, startTransition] = useTransition()
-  const [outcome, setOutcome] = useState<Outcome | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [summary, setSummary] = useState<Summary | null>(null)
   /** The PIN already sent, so a re-render cannot submit it a second time. */
   const submitted = useRef<string | null>(null)
 
   const onShift = people.filter((person) => person.onSince !== null)
 
-  /* A confirmation is worth reading but not worth dismissing by hand — the next
-     person is usually already reaching for the tablet. */
+  /* Clear the card on its own, so nobody's week is left up on a screen in a
+     busy kitchen. */
   useEffect(() => {
-    if (!outcome || outcome.tone === 'error') return
-    const timer = setTimeout(() => setOutcome(null), 4000)
+    if (!summary) return
+    const timer = setTimeout(() => setSummary(null), CARD_SECONDS * 1000)
     return () => clearTimeout(timer)
-  }, [outcome])
+  }, [summary])
 
   function reset() {
     setSelected(null)
@@ -62,18 +76,20 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
       const result = await punch(person.id, code)
 
       if (!result.ok) {
-        setOutcome({ tone: 'error', message: result.error })
+        setError(result.error)
         setPin('')
         return
       }
 
-      setOutcome({
-        tone: result.action,
-        message:
-          result.action === 'in'
-            ? `${result.name} punched in`
-            : `${result.name} punched out · ${formatMinutes(result.minutes ?? 0)}`,
-        detail: weekSummary(result.weekMinutes, result.lastWeekMinutes, result.action),
+      setError(null)
+      setSummary({
+        name: result.name,
+        action: result.action,
+        atLabel: result.atLabel,
+        minutes: result.minutes,
+        weekMinutes: result.weekMinutes,
+        lastWeekMinutes: result.lastWeekMinutes,
+        week: result.week,
       })
       reset()
       router.refresh()
@@ -90,7 +106,7 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
   function press(digit: string) {
     if (!selected || pending) return
 
-    setOutcome(null)
+    setError(null)
     setPin((current) => (current.length >= 4 ? current : current + digit))
   }
 
@@ -109,13 +125,20 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pin, selected])
 
+  function closeAll() {
+    setOpen(false)
+    setSummary(null)
+    setError(null)
+    reset()
+  }
+
   return (
     <>
       <button
         type="button"
         onClick={() => {
           setOpen(true)
-          setOutcome(null)
+          setError(null)
         }}
         className="bg-surface ring-line/70 hover:bg-surface-raised flex items-center gap-2.5 rounded-lg px-3 py-2 ring-1 transition"
       >
@@ -123,9 +146,7 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
         <span className="text-left">
           <span className="block text-sm leading-tight font-medium">Time clock</span>
           <span className="text-ink-faint block text-xs leading-tight">
-            {onShift.length === 0
-              ? 'nobody on'
-              : `${onShift.length} on shift`}
+            {onShift.length === 0 ? 'nobody on' : `${onShift.length} on shift`}
           </span>
         </span>
       </button>
@@ -138,56 +159,37 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
           className="bg-canvas/95 fixed inset-0 z-50 flex flex-col backdrop-blur"
         >
           <header className="border-line/60 flex shrink-0 items-center justify-between gap-4 border-b px-5 py-4">
-            <div>
+            <div className="min-w-0">
               <h2 className="text-2xl font-bold tracking-tight">Time clock</h2>
-              <p className="text-ink-faint text-sm">
-                {selected
-                  ? `Enter ${selected.name}'s PIN`
-                  : 'Tap your name to punch in or out'}
+              <p className="text-ink-faint truncate text-sm">
+                {summary
+                  ? `${summary.name}'s week`
+                  : selected
+                    ? `Enter ${selected.name}'s PIN`
+                    : 'Tap your name to punch in or out'}
               </p>
             </div>
             <button
               type="button"
-              onClick={() => {
-                setOpen(false)
-                reset()
-              }}
+              onClick={closeAll}
               aria-label="Close the time clock"
-              className="text-ink-muted hover:text-ink flex size-12 items-center justify-center rounded-lg transition"
+              className="text-ink-muted hover:text-ink flex size-12 shrink-0 items-center justify-center rounded-lg transition"
             >
               <X className="size-6" />
             </button>
           </header>
 
-          {outcome && (
-            <div
-              className={cn(
-                'mx-5 mt-4 flex items-start gap-2.5 rounded-lg px-4 py-3 text-lg font-medium',
-                outcome.tone === 'error'
-                  ? 'bg-rose-500/15 text-rose-300'
-                  : outcome.tone === 'in'
-                    ? 'bg-emerald-500/15 text-emerald-300'
-                    : 'bg-sky-500/15 text-sky-300',
-              )}
-            >
-              {outcome.tone === 'error' ? (
-                <X className="size-5 shrink-0" />
-              ) : (
-                <Check className="size-5 shrink-0" />
-              )}
-              <span className="min-w-0">
-                {outcome.message}
-                {outcome.detail && (
-                  <span className="block text-sm font-normal opacity-80">
-                    {outcome.detail}
-                  </span>
-                )}
-              </span>
+          {error && (
+            <div className="mx-5 mt-4 flex items-center gap-2.5 rounded-lg bg-rose-500/15 px-4 py-3 text-lg font-medium text-rose-300">
+              <X className="size-5 shrink-0" />
+              {error}
             </div>
           )}
 
           <div className="min-h-0 flex-1 overflow-y-auto p-5">
-            {selected ? (
+            {summary ? (
+              <WeekCard summary={summary} onDone={() => setSummary(null)} />
+            ) : selected ? (
               <PinPad
                 pin={pin}
                 pending={pending}
@@ -205,7 +207,7 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
                     onClick={() => {
                       setSelected(person)
                       setPin('')
-                      setOutcome(null)
+                      setError(null)
                     }}
                     className={cn(
                       'rounded-card flex flex-col items-start gap-1 px-4 py-4 text-left ring-1 transition disabled:opacity-40',
@@ -249,31 +251,127 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
   )
 }
 
-/**
- * What the confirmation says under the worker's name.
- *
- * A zero week is correct on a Monday and confusing every time: the payroll week
- * has only just begun, so hours worked on Saturday sit in the previous one.
- * Saying so, and giving that previous total, turns a number that looks like
- * lost time into the one they are about to be paid for.
- *
- * Hours only. Never pay — this screen is read by whoever is standing at it.
- */
-function weekSummary(
-  weekMinutes: number,
-  lastWeekMinutes: number,
-  action: 'in' | 'out',
-): string {
-  const suffix = action === 'in' ? ' so far' : ''
+/* -------------------------------------------------------------------------- */
 
-  if (weekMinutes > 0) {
-    return `${formatMinutes(weekMinutes)} this week${suffix}`
-  }
-  if (lastWeekMinutes > 0) {
-    return `Nothing yet this week · ${formatMinutes(lastWeekMinutes)} last week`
-  }
-  return 'First shift of the week'
+/**
+ * What a worker sees once their PIN is accepted: the punch that just happened,
+ * then the week day by day.
+ *
+ * Hours only. This is a screen in a kitchen, read by whoever is standing at it,
+ * so nothing here touches pay — that stays behind the passcode on the payroll
+ * page.
+ */
+function WeekCard({ summary, onDone }: { summary: Summary; onDone: () => void }) {
+  const punchedIn = summary.action === 'in'
+
+  return (
+    <div className="mx-auto w-full max-w-md space-y-4">
+      <div
+        className={cn(
+          'rounded-card flex items-start gap-3 px-5 py-4 ring-1',
+          punchedIn
+            ? 'bg-emerald-500/10 ring-emerald-500/40'
+            : 'bg-sky-500/10 ring-sky-500/40',
+        )}
+      >
+        <Check
+          className={cn(
+            'mt-1 size-6 shrink-0',
+            punchedIn ? 'text-emerald-400' : 'text-sky-400',
+          )}
+        />
+        <div className="min-w-0">
+          <div className="text-2xl leading-tight font-bold">{summary.name}</div>
+          <div className={cn('text-base', punchedIn ? 'text-emerald-300' : 'text-sky-300')}>
+            Punched {punchedIn ? 'in' : 'out'} at {summary.atLabel}
+            {!punchedIn && summary.minutes !== undefined && (
+              <span className="text-ink-muted">
+                {' '}
+                · {formatMinutes(summary.minutes)} shift
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-card bg-surface ring-line/70 ring-1">
+        <div className="border-line/60 border-b px-4 py-2.5">
+          <h3 className="text-ink-muted text-xs font-semibold tracking-wider uppercase">
+            This week
+          </h3>
+        </div>
+
+        <ul className="divide-line/50 divide-y">
+          {summary.week.map((day) => (
+            <li
+              key={day.date}
+              className={cn(
+                'flex items-center justify-between gap-3 px-4 py-2.5',
+                day.isToday && 'bg-accent/5',
+              )}
+            >
+              <span
+                className={cn(
+                  'text-base',
+                  day.isToday ? 'text-ink font-semibold' : 'text-ink-muted',
+                )}
+              >
+                {day.weekday}
+                {day.isToday && (
+                  <span className="text-ink-faint ml-1.5 text-xs font-normal">today</span>
+                )}
+              </span>
+
+              <span className="flex items-center gap-2">
+                {day.open && (
+                  <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                    on now
+                  </span>
+                )}
+                <span
+                  className={cn(
+                    'tabular text-base',
+                    day.minutes > 0 ? 'text-ink font-medium' : 'text-ink-faint/60',
+                  )}
+                >
+                  {formatMinutes(day.minutes)}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        <div className="border-line/60 space-y-1 border-t px-4 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="font-semibold">Week total</span>
+            <span className="tabular text-xl font-bold">
+              {summary.weekMinutes > 0 ? formatMinutes(summary.weekMinutes) : '0h'}
+            </span>
+          </div>
+
+          {/* The payroll week starts on Monday, so early in it a correct zero
+              looks like lost time. Last week is also the one about to be paid. */}
+          {summary.lastWeekMinutes > 0 && (
+            <div className="text-ink-faint flex items-baseline justify-between gap-3 text-sm">
+              <span>Last week</span>
+              <span className="tabular">{formatMinutes(summary.lastWeekMinutes)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <Button type="button" variant="secondary" size="lg" full onClick={onDone}>
+        Done
+      </Button>
+
+      <p className="text-ink-faint text-center text-xs">
+        Closes on its own in {CARD_SECONDS} seconds
+      </p>
+    </div>
+  )
 }
+
+/* -------------------------------------------------------------------------- */
 
 /** Big keys: this is operated with flour on the fingers, often in a hurry. */
 function PinPad({
