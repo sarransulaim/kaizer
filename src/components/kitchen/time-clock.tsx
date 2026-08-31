@@ -28,6 +28,8 @@ export type ClockPerson = {
 type Outcome = {
   tone: 'in' | 'out' | 'error'
   message: string
+  /** The week's hours, shown under the confirmation. Never pay. */
+  detail?: string
 }
 
 export function TimeClock({ people }: { people: ClockPerson[] }) {
@@ -71,6 +73,12 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
           result.action === 'in'
             ? `${result.name} punched in`
             : `${result.name} punched out · ${formatMinutes(result.minutes ?? 0)}`,
+        detail:
+          result.weekMinutes > 0
+            ? `${formatMinutes(result.weekMinutes)} this week${result.action === 'in' ? ' so far' : ''}`
+            : result.action === 'in'
+              ? 'First shift of the week'
+              : undefined,
       })
       reset()
       router.refresh()
@@ -159,7 +167,7 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
           {outcome && (
             <div
               className={cn(
-                'mx-5 mt-4 flex items-center gap-2.5 rounded-lg px-4 py-3 text-lg font-medium',
+                'mx-5 mt-4 flex items-start gap-2.5 rounded-lg px-4 py-3 text-lg font-medium',
                 outcome.tone === 'error'
                   ? 'bg-rose-500/15 text-rose-300'
                   : outcome.tone === 'in'
@@ -172,7 +180,14 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
               ) : (
                 <Check className="size-5 shrink-0" />
               )}
-              {outcome.message}
+              <span className="min-w-0">
+                {outcome.message}
+                {outcome.detail && (
+                  <span className="block text-sm font-normal opacity-80">
+                    {outcome.detail}
+                  </span>
+                )}
+              </span>
             </div>
           )}
 

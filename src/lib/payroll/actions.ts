@@ -8,12 +8,26 @@ import { requireSession } from '@/lib/auth/guard'
 import { db } from '@/lib/db'
 import { timeEntries, users } from '@/lib/db/schema'
 import { isValidPinFormat, verifyPin } from '@/lib/staff/pin'
-import { dateOf, toServiceInstant } from '@/lib/time'
+import { dateOf, startOfWeek, toServiceInstant } from '@/lib/time'
 
 import { minutesWorked } from './hours'
+import { getWeekMinutesForUser } from './queries'
 
 export type PunchResult =
-  | { ok: true; action: 'in' | 'out'; name: string; at: string; minutes?: number }
+  | {
+      ok: true
+      action: 'in' | 'out'
+      name: string
+      at: string
+      /** Length of the shift just closed, on a punch out. */
+      minutes?: number
+      /**
+       * Hours banked so far this week. Deliberately hours only — the kitchen
+       * tablet is in view of everyone standing at it, and what someone earns is
+       * not the room's business.
+       */
+      weekMinutes: number
+    }
   | { ok: false; error: string }
 
 function revalidateClock() {
@@ -70,6 +84,9 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
         .set({ clockOutAt: now, updatedAt: now })
         .where(eq(timeEntries.id, open.id))
 
+      /* Read after the write so the shift just finished is included. */
+      const weekMinutes = await getWeekMinutesForUser(userId, startOfWeek())
+
       revalidateClock()
       return {
         ok: true,
@@ -77,6 +94,7 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
         name: worker.name,
         at: now.toISOString(),
         minutes,
+        weekMinutes,
       }
     }
 
@@ -86,8 +104,18 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
       workDate: dateOf(now),
     })
 
+    /* The shift that just opened counts nothing yet, so this is what they had
+       banked walking in. */
+    const weekMinutes = await getWeekMinutesForUser(userId, startOfWeek())
+
     revalidateClock()
-    return { ok: true, action: 'in', name: worker.name, at: now.toISOString() }
+    return {
+      ok: true,
+      action: 'in',
+      name: worker.name,
+      at: now.toISOString(),
+      weekMinutes,
+    }
   } catch (error) {
     /* The one-open-shift-per-worker index rejects a double tap outright, which
        is the correct outcome — report it as already being on the clock rather

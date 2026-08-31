@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { and, asc, desc, eq, gte, isNull, lte } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, isNotNull, isNull, lte } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
 import { timeEntries, users } from '@/lib/db/schema'
@@ -223,4 +223,43 @@ export async function getRecentEntries(userId: string, limit = 20) {
     .where(eq(timeEntries.userId, userId))
     .orderBy(desc(timeEntries.clockInAt))
     .limit(limit)
+}
+
+/**
+ * Minutes a worker has banked in the week containing `mondayIso`.
+ *
+ * Shown on the kitchen tablet after a successful punch. Minutes are rounded per
+ * shift and then summed — the same order the payroll sheet uses — because
+ * rounding the total instead would let the tablet and the timesheet disagree by
+ * a minute, and the first person to notice would be the one being paid.
+ *
+ * Open shifts contribute nothing, matching the payroll page: time is counted
+ * once it has been finished.
+ */
+export async function getWeekMinutesForUser(
+  userId: string,
+  mondayIso: string,
+): Promise<number> {
+  const dates = weekDates(mondayIso)
+  const sunday = dates[dates.length - 1]
+
+  const rows = await db
+    .select({
+      clockInAt: timeEntries.clockInAt,
+      clockOutAt: timeEntries.clockOutAt,
+    })
+    .from(timeEntries)
+    .where(
+      and(
+        eq(timeEntries.userId, userId),
+        gte(timeEntries.workDate, mondayIso),
+        lte(timeEntries.workDate, sunday),
+        isNotNull(timeEntries.clockOutAt),
+      ),
+    )
+
+  return rows.reduce(
+    (sum, row) => sum + minutesWorked(row.clockInAt, row.clockOutAt!),
+    0,
+  )
 }
