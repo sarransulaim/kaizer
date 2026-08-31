@@ -135,3 +135,53 @@ export function currentTimeValue(): string {
 export function toTimeInputValue(timeStr: string): string {
   return timeStr.slice(0, 5)
 }
+
+/* -------------------------------------------------------------------------- */
+/*                                   Weeks                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The Monday of the week containing `isoDate` (today if omitted).
+ *
+ * Luxon already treats Monday as the first day of the week, which happens to be
+ * how the payroll week is counted here — Monday through Sunday.
+ */
+export function startOfWeek(isoDate?: string): string {
+  const base = isoDate
+    ? DateTime.fromISO(isoDate, { zone: ZONE })
+    : DateTime.now().setZone(ZONE)
+  return base.startOf('week').toISODate()!
+}
+
+/** The seven ISO dates of the week beginning on `mondayIso`. */
+export function weekDates(mondayIso: string): string[] {
+  const monday = DateTime.fromISO(mondayIso, { zone: ZONE })
+  return Array.from({ length: 7 }, (_, i) => monday.plus({ days: i }).toISODate()!)
+}
+
+/** "Aug 25 – Aug 31", or "Aug 25 – Sep 1" across a month boundary. */
+export function weekRangeLabel(mondayIso: string): string {
+  const monday = DateTime.fromISO(mondayIso, { zone: ZONE })
+  const sunday = monday.plus({ days: 6 })
+  return `${monday.toFormat('LLL d')} – ${sunday.toFormat('LLL d')}`
+}
+
+/** "Mon", for the payroll column headers. */
+export function weekdayShort(isoDate: string): string {
+  return DateTime.fromISO(isoDate, { zone: ZONE }).toFormat('ccc')
+}
+
+/** The local calendar date an instant falls on, in the business timezone. */
+export function dateOf(instant: Date): string {
+  return DateTime.fromJSDate(instant).setZone(ZONE).toISODate()!
+}
+
+/** "6:04 PM" for an absolute instant, in the business timezone. */
+export function formatInstantTime(instant: Date): string {
+  return DateTime.fromJSDate(instant).setZone(ZONE).toFormat('h:mm a')
+}
+
+/** `HH:mm` for an instant, for pre-filling a time input. */
+export function instantToTimeValue(instant: Date): string {
+  return DateTime.fromJSDate(instant).setZone(ZONE).toFormat('HH:mm')
+}

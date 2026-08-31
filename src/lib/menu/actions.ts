@@ -1,6 +1,7 @@
 'use server'
 
 import { asc, eq, sql } from 'drizzle-orm'
+import { isSignedIn } from '@/lib/auth/guard'
 import { revalidatePath } from 'next/cache'
 
 import { db } from '@/lib/db'
@@ -100,6 +101,10 @@ export async function createMenuItem(
 ): Promise<ActionResult<{ itemId: string }>> {
   const parsed = newMenuItemSchema.safeParse(input)
   if (!parsed.success) {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
     return {
       ok: false,
       error: 'Please fix the highlighted fields',
@@ -157,6 +162,10 @@ export async function updateMenuItem(
   itemId: string,
   input: MenuItemInput,
 ): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   const parsed = menuItemInputSchema.safeParse(input)
   if (!parsed.success) {
     return {
@@ -208,6 +217,10 @@ export async function setMenuItemActive(
   itemId: string,
   active: boolean,
 ): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   try {
     await db
       .update(menuItems)
@@ -223,6 +236,10 @@ export async function setMenuItemActive(
 }
 
 export async function deleteMenuItem(itemId: string): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   try {
     const used = await itemUsage(itemId)
     if (used > 0) {
@@ -252,6 +269,10 @@ export async function moveMenuItem(
   itemId: string,
   direction: 'up' | 'down',
 ): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   try {
     const items = await db
       .select({ id: menuItems.id })
@@ -292,6 +313,10 @@ export async function addVariant(
   itemId: string,
   input: VariantInput,
 ): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   const parsed = variantInputSchema.safeParse(input)
   if (!parsed.success) {
     return {
@@ -335,6 +360,10 @@ export async function updateVariant(
   variantId: string,
   input: VariantInput,
 ): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   const parsed = variantInputSchema.safeParse(input)
   if (!parsed.success) {
     return {
@@ -367,6 +396,10 @@ export async function updateVariant(
 }
 
 export async function deleteVariant(variantId: string): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   try {
     const used = await variantUsage(variantId)
     if (used > 0) {

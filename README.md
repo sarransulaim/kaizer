@@ -74,6 +74,7 @@ removes exactly what it created. Local only — never run it against production.
 | `/upcoming` | Redirect to `/?view=upcoming`, kept for the installed PWA |
 | `/prep` | Aggregated cook list for a chosen day, counting down as orders close |
 | `/analytics` | Sales, items, days, payments and customers over a chosen range |
+| `/payroll` | Monday-to-Sunday timesheet, hours and payout per person |
 | `/orders/new` | Order entry |
 | `/orders/[id]` | Order detail, payment, audit history |
 | `/kitchen` | Wall-tablet display (no navigation, wake lock) |
@@ -110,6 +111,30 @@ deposits, so "we sold $4,000" and "we have $4,000" are rarely the same number.
 Every revenue figure on `/analytics` says which one it is, and the gap between
 them is surfaced as outstanding rather than averaged away. Cancelled orders
 never count toward revenue — they are reported once, on their own.
+
+**The app is split in two, and the split is enforced.**
+
+`/kitchen` is open: the wall tablet and the workers' phones get the order
+board, the recipes and the time clock without a login. Everything else — orders,
+customer phone numbers, revenue, payroll, settings — sits behind one shared
+passcode held in a signed cookie.
+
+Middleware guards the pages, but that is only half of it. A server action is
+addressed by its own id and posted to whichever route the browser is on, so an
+action invoked from the open kitchen page never passes through a protected path.
+Every office-side action therefore checks the session itself. The two
+deliberately left open are `updateOrderStatus`, which is the entire point of the
+kitchen display, and `punch`, which is guarded by the worker's PIN instead.
+
+Set `APP_PASSCODE` to change the passcode; changing `AUTH_SECRET` signs every
+device out.
+
+**Hours are counted in whole minutes, pay in integer cents.** Every hour is paid
+at the worker's flat rate — `payCents` in `lib/payroll/hours.ts` is the only
+place a rate meets an hour count, so switching overtime on later is one
+function. An open shift counts as zero until it is closed: a forgotten punch-out
+must not quietly inflate a week's wages, so it is shown as open and waits to be
+corrected. Corrections stamp who made them.
 
 **The cook list counts down.** `getPrepSummary` counts only orders that are not
 yet completed, so a tray drops off the prep sheet, the kitchen wall and the

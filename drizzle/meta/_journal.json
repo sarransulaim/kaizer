@@ -15,6 +15,13 @@
       "when": 1787923898001,
       "tag": "0001_swift_virginia_dare",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788208701321,
+      "tag": "0002_brief_norrin_radd",
+      "breakpoints": true
     }
   ]
 }

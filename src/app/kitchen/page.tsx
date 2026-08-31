@@ -1,11 +1,20 @@
 import { KitchenBoard, type KitchenOrder } from '@/components/kitchen/board'
+import { TimeClock, type ClockPerson } from '@/components/kitchen/time-clock'
 import { KitchenLive } from '@/components/kitchen-live'
 import { ConnectionDot } from '@/components/realtime-refresh'
 import { getRecipeLookup } from '@/lib/menu/queries'
 import { getKitchenBoard, type ItemTotal } from '@/lib/orders/queries'
+import { getClockBoard } from '@/lib/payroll/queries'
+import { minutesWorked } from '@/lib/payroll/hours'
 import { FULFILLMENT_LABELS } from '@/lib/orders/status'
 import type { OrderWithItems } from '@/lib/orders/queries'
-import { formatDate, formatDateLong, formatTime, minutesUntil } from '@/lib/time'
+import {
+  formatDate,
+  formatDateLong,
+  formatInstantTime,
+  formatTime,
+  minutesUntil,
+} from '@/lib/time'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,7 +32,21 @@ export const metadata = { title: 'Kitchen' }
  * Both now come from one query, so the numbers and the cards cannot drift.
  */
 export default async function KitchenPage() {
-  const [board, recipes] = await Promise.all([getKitchenBoard(), getRecipeLookup()])
+  const [board, recipes, clock] = await Promise.all([
+    getKitchenBoard(),
+    getRecipeLookup(),
+    getClockBoard(),
+  ])
+
+  const now = new Date()
+  const people: ClockPerson[] = clock.map((person) => ({
+    id: person.id,
+    name: person.name,
+    role: person.role,
+    hasPin: person.hasPin,
+    onSince: person.onSince ? formatInstantTime(person.onSince) : null,
+    minutesOn: person.onSince ? minutesWorked(person.onSince, now) : null,
+  }))
   const remaining = board.live.length + board.overdue.length
 
   return (
@@ -35,6 +58,7 @@ export default async function KitchenPage() {
             <p className="text-ink-faint text-sm">{formatDateLong(board.date)}</p>
           </div>
           <div className="flex items-center gap-4">
+            <TimeClock people={people} />
             <div className="text-right">
               <div className="tabular text-2xl leading-none font-bold">
                 {remaining}

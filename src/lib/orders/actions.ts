@@ -4,6 +4,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
 import { getCurrentActor } from '@/lib/actor'
+import { isSignedIn } from '@/lib/auth/guard'
 import { TAX_RATE } from '@/lib/config'
 import { db } from '@/lib/db'
 import {
@@ -49,6 +50,10 @@ export async function createOrder(
   const parsed = createOrderSchema.safeParse(input)
 
   if (!parsed.success) {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
     const fieldErrors: Record<string, string> = {}
     for (const issue of parsed.error.issues) {
       const key = issue.path.join('.') || 'form'
@@ -258,6 +263,10 @@ export async function updatePayment(input: {
   paymentMethod?: 'zelle' | 'cash' | 'card' | 'venmo' | 'other'
   paymentRef?: string
 }): Promise<ActionResult> {
+  if (!(await isSignedIn())) {
+    return { ok: false, error: 'Not signed in' }
+  }
+
   const parsed = updatePaymentSchema.safeParse(input)
   if (!parsed.success) return { ok: false, error: 'Invalid payment details' }
 
@@ -320,6 +329,8 @@ export async function updatePayment(input: {
 
 /** Called from the order form as the operator types a phone number. */
 export async function lookupCustomer(phoneInput: string) {
+  if (!(await isSignedIn())) return null
+
   const phone = normalizePhone(phoneInput)
   if (phone.length < 10) return null
 

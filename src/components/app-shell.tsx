@@ -1,13 +1,6 @@
 'use client'
 
-import {
-  BarChart3,
-  ChefHat,
-  ClipboardList,
-  LayoutDashboard,
-  Plus,
-  Settings,
-} from 'lucide-react'
+import { BarChart3, ChefHat, ClipboardList, Clock, LayoutDashboard, Plus, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
@@ -22,6 +15,7 @@ const NAV = [
   { href: '/prep', label: 'Prep', icon: ClipboardList },
   { href: '/kitchen', label: 'Kitchen', icon: ChefHat },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/payroll', label: 'Payroll', icon: Clock },
   { href: '/settings', label: 'Settings', icon: Settings },
 ] as const
 
@@ -103,7 +97,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         {/* Mobile bottom tabs */}
         <nav className="bg-canvas/90 ring-line/60 pb-safe fixed inset-x-0 bottom-0 z-20 ring-1 backdrop-blur lg:hidden">
-          <div className="grid grid-cols-5">
+          <div className="grid grid-cols-6">
             {NAV.map(({ href, label, icon: Icon }) => {
               const active = isActive(pathname, href)
               return (

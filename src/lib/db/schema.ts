@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm'
+import { relations, sql } from 'drizzle-orm'
 import {
   boolean,
   date,
@@ -12,6 +12,7 @@ import {
   time,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
 
@@ -81,11 +82,25 @@ export const userRoleEnum = pgEnum('user_role', [
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
-  email: text('email').notNull().unique(),
+  /**
+   * Nullable: kitchen staff are added by name and a PIN so they can clock in,
+   * and most of them have no reason to hold an account. Postgres allows any
+   * number of NULLs under a unique constraint, so the owner's address stays
+   * unique without forcing an address on everyone else.
+   */
+  email: text('email').unique(),
   phone: text('phone'),
   role: userRoleEnum('role').notNull().default('owner'),
   // Populated only once auth is enabled.
   passwordHash: text('password_hash'),
+  /**
+   * Scrypt hash of the 4-digit clock-in PIN. Four digits is weak in isolation;
+   * it is here to stop one worker clocking in as another at a tablet they are
+   * both standing at, not to resist an attacker who already has the database.
+   */
+  pinHash: text('pin_hash'),
+  /** Pay rate in cents per hour. Zero means "not on payroll". */
+  hourlyRateCents: integer('hourly_rate_cents').notNull().default(0),
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -270,6 +285,62 @@ export const orderItems = pgTable(
 )
 
 /* -------------------------------------------------------------------------- */
+/*                                 Time clock                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One row per shift. `clockOutAt` is null while someone is on the clock, which
+ * is what the kitchen tablet reads to decide whether a worker's button says
+ * "Punch in" or "Punch out".
+ *
+ * `workDate` is the local calendar date the shift *started*, stored rather than
+ * derived. Payroll is grouped by business day and week, and a shift that runs
+ * past midnight still belongs to the day it began — deriving that from the
+ * timestamp at query time would need timezone arithmetic in every report.
+ */
+export const timeEntries = pgTable(
+  'time_entries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+
+    clockInAt: timestamp('clock_in_at', { withTimezone: true }).notNull(),
+    clockOutAt: timestamp('clock_out_at', { withTimezone: true }),
+
+    workDate: date('work_date').notNull(),
+
+    /** "Forgot to punch out", "covered for Imran" — shown on the payroll sheet. */
+    note: text('note'),
+
+    /**
+     * Set when the owner corrects a punch by hand. A corrected timesheet that
+     * doesn't say it was corrected is how payroll disputes start.
+     */
+    editedById: uuid('edited_by_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    editedAt: timestamp('edited_at', { withTimezone: true }),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('time_entries_user_date_idx').on(t.userId, t.workDate),
+    index('time_entries_date_idx').on(t.workDate),
+    /**
+     * At most one open shift per worker, enforced by the database rather than by
+     * a check-then-insert in application code. Two taps on a laggy tablet would
+     * otherwise open two shifts and silently double the week's hours.
+     */
+    uniqueIndex('time_entries_one_open_per_user')
+      .on(t.userId)
+      .where(sql`${t.clockOutAt} IS NULL`),
+  ],
+)
+
+/* -------------------------------------------------------------------------- */
 /*                                Audit trail                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -390,6 +461,14 @@ export const orderItemsRelations = relations(orderItems, ({ one }) => ({
   }),
 }))
 
+export const usersRelations = relations(users, ({ many }) => ({
+  timeEntries: many(timeEntries),
+}))
+
+export const timeEntriesRelations = relations(timeEntries, ({ one }) => ({
+  user: one(users, { fields: [timeEntries.userId], references: [users.id] }),
+}))
+
 export const orderEventsRelations = relations(orderEvents, ({ one }) => ({
   order: one(orders, { fields: [orderEvents.orderId], references: [orders.id] }),
   actor: one(users, { fields: [orderEvents.actorId], references: [users.id] }),
@@ -408,6 +487,8 @@ export type Order = typeof orders.$inferSelect
 export type NewOrder = typeof orders.$inferInsert
 export type OrderItem = typeof orderItems.$inferSelect
 export type OrderEvent = typeof orderEvents.$inferSelect
+export type TimeEntry = typeof timeEntries.$inferSelect
+export type NewTimeEntry = typeof timeEntries.$inferInsert
 export type PushSubscription = typeof pushSubscriptions.$inferSelect
 export type AppNotification = typeof notifications.$inferSelect
 

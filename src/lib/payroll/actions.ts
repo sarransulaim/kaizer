@@ -1,0 +1,257 @@
+'use server'
+
+import { and, eq, isNull } from 'drizzle-orm'
+import { revalidatePath } from 'next/cache'
+
+import { getCurrentActor } from '@/lib/actor'
+import { requireSession } from '@/lib/auth/guard'
+import { db } from '@/lib/db'
+import { timeEntries, users } from '@/lib/db/schema'
+import { isValidPinFormat, verifyPin } from '@/lib/staff/pin'
+import { dateOf, toServiceInstant } from '@/lib/time'
+
+import { minutesWorked } from './hours'
+
+export type PunchResult =
+  | { ok: true; action: 'in' | 'out'; name: string; at: string; minutes?: number }
+  | { ok: false; error: string }
+
+function revalidateClock() {
+  revalidatePath('/kitchen')
+  revalidatePath('/payroll')
+}
+
+/* -------------------------------------------------------------------------- */
+/*                          Punching (kitchen, public)                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Clock a worker in or out.
+ *
+ * Deliberately callable without the office passcode — the tablet by the pass
+ * has no login — so the PIN is the only thing standing between a worker and
+ * someone else's timesheet, and it is checked here on the server every time.
+ *
+ * Which direction the punch goes is decided from the database rather than from
+ * anything the client says, so a stale tablet showing an out-of-date button
+ * cannot open a second shift or close one twice.
+ */
+export async function punch(userId: string, pin: string): Promise<PunchResult> {
+  if (!isValidPinFormat(pin)) {
+    return { ok: false, error: 'Enter your 4-digit PIN' }
+  }
+
+  try {
+    const worker = await db.query.users.findFirst({ where: eq(users.id, userId) })
+
+    if (!worker || !worker.active) {
+      return { ok: false, error: 'That person is not on the staff list' }
+    }
+    if (!worker.pinHash) {
+      return { ok: false, error: `${worker.name} has no PIN set yet. Ask the owner.` }
+    }
+    if (!verifyPin(pin, worker.pinHash)) {
+      /* Slow a guesser down without making an honest mistype feel broken. */
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      return { ok: false, error: 'That PIN is not right' }
+    }
+
+    const now = new Date()
+
+    const open = await db.query.timeEntries.findFirst({
+      where: and(eq(timeEntries.userId, userId), isNull(timeEntries.clockOutAt)),
+    })
+
+    if (open) {
+      const minutes = minutesWorked(open.clockInAt, now)
+
+      await db
+        .update(timeEntries)
+        .set({ clockOutAt: now, updatedAt: now })
+        .where(eq(timeEntries.id, open.id))
+
+      revalidateClock()
+      return {
+        ok: true,
+        action: 'out',
+        name: worker.name,
+        at: now.toISOString(),
+        minutes,
+      }
+    }
+
+    await db.insert(timeEntries).values({
+      userId,
+      clockInAt: now,
+      workDate: dateOf(now),
+    })
+
+    revalidateClock()
+    return { ok: true, action: 'in', name: worker.name, at: now.toISOString() }
+  } catch (error) {
+    /* The one-open-shift-per-worker index rejects a double tap outright, which
+       is the correct outcome — report it as already being on the clock rather
+       than as a failure. */
+    if (error instanceof Error && error.message.includes('time_entries_one_open_per_user')) {
+      return { ok: false, error: 'You are already clocked in. Refresh and try again.' }
+    }
+
+    console.error('[punch]', error)
+    return { ok: false, error: 'Could not record that. Try again.' }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                        Corrections (office, gated)                         */
+/* -------------------------------------------------------------------------- */
+
+export type EntryResult = { ok: true } | { ok: false; error: string }
+
+const DENIED: EntryResult = { ok: false, error: 'Not signed in' }
+
+/**
+ * Fix a punch by hand.
+ *
+ * Forgotten punch-outs are certain, so this is not an edge case — it is part of
+ * running the week. Every correction stamps who made it and when, because a
+ * timesheet that was quietly altered is worth very little in a disagreement
+ * about wages.
+ */
+export async function updateEntry(input: {
+  entryId: string
+  date: string
+  clockInTime: string
+  clockOutTime: string | null
+  note: string | null
+}): Promise<EntryResult> {
+  if (!(await isAllowed())) return DENIED
+
+  try {
+    const actor = await getCurrentActor()
+
+    const clockInAt = toServiceInstant(input.date, input.clockInTime)
+    const clockOutAt = input.clockOutTime
+      ? toServiceInstant(input.date, input.clockOutTime)
+      : null
+
+    if (clockOutAt && clockOutAt.getTime() <= clockInAt.getTime()) {
+      /* A shift running past midnight is real; one ending before it started is
+         a typo. Roll the end forward a day rather than rejecting it outright. */
+      clockOutAt.setDate(clockOutAt.getDate() + 1)
+    }
+
+    await db
+      .update(timeEntries)
+      .set({
+        clockInAt,
+        clockOutAt,
+        workDate: input.date,
+        note: input.note?.trim() || null,
+        editedById: actor.id,
+        editedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(timeEntries.id, input.entryId))
+
+    revalidateClock()
+    return { ok: true }
+  } catch (error) {
+    console.error('[updateEntry]', error)
+    return { ok: false, error: 'Could not save that change' }
+  }
+}
+
+export async function addEntry(input: {
+  userId: string
+  date: string
+  clockInTime: string
+  clockOutTime: string
+  note: string | null
+}): Promise<EntryResult> {
+  if (!(await isAllowed())) return DENIED
+
+  try {
+    const actor = await getCurrentActor()
+
+    const clockInAt = toServiceInstant(input.date, input.clockInTime)
+    const clockOutAt = toServiceInstant(input.date, input.clockOutTime)
+    if (clockOutAt.getTime() <= clockInAt.getTime()) {
+      clockOutAt.setDate(clockOutAt.getDate() + 1)
+    }
+
+    await db.insert(timeEntries).values({
+      userId: input.userId,
+      clockInAt,
+      clockOutAt,
+      workDate: input.date,
+      note: input.note?.trim() || null,
+      editedById: actor.id,
+      editedAt: new Date(),
+    })
+
+    revalidateClock()
+    return { ok: true }
+  } catch (error) {
+    console.error('[addEntry]', error)
+    return { ok: false, error: 'Could not add that shift' }
+  }
+}
+
+export async function deleteEntry(entryId: string): Promise<EntryResult> {
+  if (!(await isAllowed())) return DENIED
+
+  try {
+    await db.delete(timeEntries).where(eq(timeEntries.id, entryId))
+    revalidateClock()
+    return { ok: true }
+  } catch (error) {
+    console.error('[deleteEntry]', error)
+    return { ok: false, error: 'Could not remove that shift' }
+  }
+}
+
+/** Close a shift someone left open, at a time the owner supplies. */
+export async function closeOpenShift(
+  entryId: string,
+  clockOutTime: string,
+): Promise<EntryResult> {
+  if (!(await isAllowed())) return DENIED
+
+  try {
+    const entry = await db.query.timeEntries.findFirst({
+      where: eq(timeEntries.id, entryId),
+    })
+    if (!entry) return { ok: false, error: 'That shift no longer exists' }
+
+    const actor = await getCurrentActor()
+    const clockOutAt = toServiceInstant(entry.workDate, clockOutTime)
+    if (clockOutAt.getTime() <= entry.clockInAt.getTime()) {
+      clockOutAt.setDate(clockOutAt.getDate() + 1)
+    }
+
+    await db
+      .update(timeEntries)
+      .set({
+        clockOutAt,
+        editedById: actor.id,
+        editedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(timeEntries.id, entryId))
+
+    revalidateClock()
+    return { ok: true }
+  } catch (error) {
+    console.error('[closeOpenShift]', error)
+    return { ok: false, error: 'Could not close that shift' }
+  }
+}
+
+async function isAllowed(): Promise<boolean> {
+  try {
+    await requireSession()
+    return true
+  } catch {
+    return false
+  }
+}
