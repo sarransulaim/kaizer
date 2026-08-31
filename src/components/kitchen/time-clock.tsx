@@ -73,12 +73,7 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
           result.action === 'in'
             ? `${result.name} punched in`
             : `${result.name} punched out · ${formatMinutes(result.minutes ?? 0)}`,
-        detail:
-          result.weekMinutes > 0
-            ? `${formatMinutes(result.weekMinutes)} this week${result.action === 'in' ? ' so far' : ''}`
-            : result.action === 'in'
-              ? 'First shift of the week'
-              : undefined,
+        detail: weekSummary(result.weekMinutes, result.lastWeekMinutes, result.action),
       })
       reset()
       router.refresh()
@@ -252,6 +247,32 @@ export function TimeClock({ people }: { people: ClockPerson[] }) {
       )}
     </>
   )
+}
+
+/**
+ * What the confirmation says under the worker's name.
+ *
+ * A zero week is correct on a Monday and confusing every time: the payroll week
+ * has only just begun, so hours worked on Saturday sit in the previous one.
+ * Saying so, and giving that previous total, turns a number that looks like
+ * lost time into the one they are about to be paid for.
+ *
+ * Hours only. Never pay — this screen is read by whoever is standing at it.
+ */
+function weekSummary(
+  weekMinutes: number,
+  lastWeekMinutes: number,
+  action: 'in' | 'out',
+): string {
+  const suffix = action === 'in' ? ' so far' : ''
+
+  if (weekMinutes > 0) {
+    return `${formatMinutes(weekMinutes)} this week${suffix}`
+  }
+  if (lastWeekMinutes > 0) {
+    return `Nothing yet this week · ${formatMinutes(lastWeekMinutes)} last week`
+  }
+  return 'First shift of the week'
 }
 
 /** Big keys: this is operated with flour on the fingers, often in a hurry. */

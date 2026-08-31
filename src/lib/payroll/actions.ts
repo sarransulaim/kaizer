@@ -8,7 +8,7 @@ import { requireSession } from '@/lib/auth/guard'
 import { db } from '@/lib/db'
 import { timeEntries, users } from '@/lib/db/schema'
 import { isValidPinFormat, verifyPin } from '@/lib/staff/pin'
-import { dateOf, startOfWeek, toServiceInstant } from '@/lib/time'
+import { addDays, dateOf, startOfWeek, toServiceInstant } from '@/lib/time'
 
 import { minutesWorked } from './hours'
 import { getWeekMinutesForUser } from './queries'
@@ -27,6 +27,14 @@ export type PunchResult =
        * not the room's business.
        */
       weekMinutes: number
+      /**
+       * Last week's total, carried so the tablet can explain an empty week.
+       * The payroll week runs Monday to Sunday, so anyone punching in early in
+       * the week sees a zero that is correct but looks like lost hours — the
+       * previous week is both the reassurance and the number they are about to
+       * be paid for.
+       */
+      lastWeekMinutes: number
     }
   | { ok: false; error: string }
 
@@ -85,7 +93,11 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
         .where(eq(timeEntries.id, open.id))
 
       /* Read after the write so the shift just finished is included. */
-      const weekMinutes = await getWeekMinutesForUser(userId, startOfWeek())
+      const monday = startOfWeek()
+      const [weekMinutes, lastWeekMinutes] = await Promise.all([
+        getWeekMinutesForUser(userId, monday),
+        getWeekMinutesForUser(userId, addDays(monday, -7)),
+      ])
 
       revalidateClock()
       return {
@@ -95,6 +107,7 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
         at: now.toISOString(),
         minutes,
         weekMinutes,
+        lastWeekMinutes,
       }
     }
 
@@ -106,7 +119,11 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
 
     /* The shift that just opened counts nothing yet, so this is what they had
        banked walking in. */
-    const weekMinutes = await getWeekMinutesForUser(userId, startOfWeek())
+    const monday = startOfWeek()
+    const [weekMinutes, lastWeekMinutes] = await Promise.all([
+      getWeekMinutesForUser(userId, monday),
+      getWeekMinutesForUser(userId, addDays(monday, -7)),
+    ])
 
     revalidateClock()
     return {
@@ -115,6 +132,7 @@ export async function punch(userId: string, pin: string): Promise<PunchResult> {
       name: worker.name,
       at: now.toISOString(),
       weekMinutes,
+      lastWeekMinutes,
     }
   } catch (error) {
     /* The one-open-shift-per-worker index rejects a double tap outright, which
