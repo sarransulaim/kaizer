@@ -11,6 +11,7 @@ import {
   formatInstantTime,
   instantToTimeValue,
   startOfWeek,
+  today,
   weekdayShort,
   weekRangeLabel,
 } from '@/lib/time'
@@ -151,6 +152,7 @@ export default async function PayrollPage(props: PageProps<'/payroll'>) {
           people={people}
           dates={week.dates}
           weekdays={week.dates.map(weekdayShort)}
+          today={today()}
         />
       )}
     </div>

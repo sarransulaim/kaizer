@@ -61,10 +61,13 @@ export function Timesheet({
   people,
   dates,
   weekdays,
+  today,
 }: {
   people: PersonView[]
   dates: string[]
   weekdays: string[]
+  /** Today in the business timezone, as the latest shift that can be recorded. */
+  today: string
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
 
@@ -150,7 +153,7 @@ export function Timesheet({
 
       {people.map((person) =>
         expanded === person.id ? (
-          <PersonDetail key={person.id} person={person} dates={dates} />
+          <PersonDetail key={person.id} person={person} dates={dates} today={today} />
         ) : null,
       )}
     </div>
@@ -159,7 +162,15 @@ export function Timesheet({
 
 /* -------------------------------------------------------------------------- */
 
-function PersonDetail({ person, dates }: { person: PersonView; dates: string[] }) {
+function PersonDetail({
+  person,
+  dates,
+  today,
+}: {
+  person: PersonView
+  dates: string[]
+  today: string
+}) {
   const [adding, setAdding] = useState(false)
 
   const shifts = person.days.flatMap((day) => day.shifts)
@@ -183,6 +194,7 @@ function PersonDetail({ person, dates }: { person: PersonView; dates: string[] }
         <AddShift
           userId={person.id}
           dates={dates}
+          today={today}
           onDone={() => setAdding(false)}
         />
       )}
@@ -383,20 +395,33 @@ function ShiftRow({ shift, weekday }: { shift: ShiftView; weekday: string }) {
   )
 }
 
+/**
+ * Add a shift someone worked but never punched for.
+ *
+ * The date is a free date field rather than a list of the week on screen. Shifts
+ * are almost always written up after the fact — most often the following
+ * Monday, for a week that has already ended — so restricting the choice to the
+ * week being viewed put the days most likely to be needed out of reach. Future
+ * dates are capped instead: a timesheet records hours already worked.
+ */
 function AddShift({
   userId,
   dates,
+  today,
   onDone,
 }: {
   userId: string
   dates: string[]
+  today: string
   onDone: () => void
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
-  const [date, setDate] = useState(dates[0])
+  /* Default to today when the week on screen contains it, otherwise to the
+     start of that week — whichever the operator is most likely to have meant. */
+  const [date, setDate] = useState(dates.includes(today) ? today : dates[0])
   const [inValue, setIn] = useState('09:00')
   const [outValue, setOut] = useState('17:00')
   const [note, setNote] = useState('')
@@ -415,7 +440,15 @@ function AddShift({
         setError(result.error)
         return
       }
+
       onDone()
+
+      /* A shift dated outside the week on screen would otherwise save and
+         appear to vanish, so follow it to the week it landed in. */
+      const target = mondayOf(date)
+      if (target !== dates[0]) {
+        router.push(`/payroll?week=${target}`)
+      }
       router.refresh()
     })
   }
@@ -423,17 +456,14 @@ function AddShift({
   return (
     <div className="border-line/60 space-y-3 border-b px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <input
+          type="date"
+          aria-label="Shift date"
           value={date}
+          max={today}
           onChange={(event) => setDate(event.target.value)}
-          className="bg-surface-raised ring-line focus:ring-accent text-ink h-10 rounded-lg px-3 text-sm ring-1 focus:ring-2 focus:outline-none"
-        >
-          {dates.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+          className="bg-surface-raised ring-line focus:ring-accent text-ink tabular h-10 rounded-lg px-2.5 text-sm ring-1 focus:ring-2 focus:outline-none"
+        />
         <TimeInput value={inValue} onChange={setIn} label="Clock in" />
         <span className="text-ink-faint text-xs">to</span>
         <TimeInput value={outValue} onChange={setOut} label="Clock out" />
@@ -457,7 +487,10 @@ function AddShift({
           onClick={submit}
         >
           {pending && <Loader2 className="size-4 animate-spin" />}
-          Add shift
+          {/* Not "Add shift": the button that opens this panel says that, and
+              two buttons a few pixels apart saying the same words meant two
+              different things. */}
+          Save shift
         </Button>
         <Button type="button" variant="ghost" size="sm" onClick={onDone}>
           Cancel
@@ -465,6 +498,21 @@ function AddShift({
       </div>
     </div>
   )
+}
+
+/**
+ * The Monday of the week containing an ISO date.
+ *
+ * Deliberately arithmetic on the bare `YYYY-MM-DD` in UTC: parsing it as a
+ * local date would shift it a day for anyone west of Greenwich, which is
+ * exactly where this business is.
+ */
+function mondayOf(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const weekday = (date.getUTCDay() + 6) % 7
+  date.setUTCDate(date.getUTCDate() - weekday)
+  return date.toISOString().slice(0, 10)
 }
 
 function TimeInput({
