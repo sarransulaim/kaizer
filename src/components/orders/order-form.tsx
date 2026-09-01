@@ -40,6 +40,35 @@ const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'other', label: 'Other' },
 ]
 
+type CustomItem = {
+  id: string
+  name: string
+  /** As typed, in dollars. */
+  price: string
+  quantity: number
+}
+
+type PriceLine = {
+  key: string
+  kind: 'menu' | 'custom'
+  quantity: number
+  itemName: string
+  sizeLabel: string
+  listCents: number
+  chargedCents: number
+  lineListCents: number
+  lineChargedCents: number
+  invalid: boolean
+  aboveList: boolean
+  changed: boolean
+}
+
+/* Ids for custom lines. Only ever React keys and a handle on a row of local
+   state, so a counter is enough — and it avoids depending on
+   `crypto.randomUUID` being present on an older tablet browser. */
+let customIdCounter = 0
+const nextCustomId = () => `custom-${(customIdCounter += 1)}`
+
 export function OrderForm({ menu }: { menu: MenuWithVariants }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -60,6 +89,12 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   /* Typed dollar strings, keyed by variant. Empty means "charge menu price". */
   const [priceOverrides, setPriceOverrides] = useState<Record<string, string>>({})
+  /**
+   * Lines that exist only on this order — a special request, a surcharge, a
+   * cake somebody asked for. Held as typed strings so a half-entered price is
+   * never rounded while it is still being typed.
+   */
+  const [customItems, setCustomItems] = useState<CustomItem[]>([])
   const [reviewing, setReviewing] = useState(false)
 
   const [amountPaid, setAmountPaid] = useState('')
@@ -135,32 +170,63 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
    * "100 − 20 = 80" instead of just showing 80 with no explanation.
    */
   const pricing = useMemo(() => {
-    const lines = Object.entries(quantities).flatMap(([variantId, quantity]) => {
-      const variant = variantIndex.get(variantId)
-      if (!variant) return []
+    const menuLines: PriceLine[] = Object.entries(quantities).flatMap(
+      ([variantId, quantity]) => {
+        const variant = variantIndex.get(variantId)
+        if (!variant) return []
 
-      const listCents = variant.priceCents
-      const typed = priceOverrides[variantId]?.trim() ?? ''
-      const parsed = typed ? parseDollarsToCents(typed) : null
-      const chargedCents = parsed ?? listCents
+        const listCents = variant.priceCents
+        const typed = priceOverrides[variantId]?.trim() ?? ''
+        const parsed = typed ? parseDollarsToCents(typed) : null
+        const chargedCents = parsed ?? listCents
 
-      return [
-        {
-          variantId,
-          quantity,
-          itemName: variant.itemName,
-          sizeLabel: variant.sizeLabel,
-          listCents,
-          chargedCents,
-          lineListCents: listCents * quantity,
-          lineChargedCents: chargedCents * quantity,
-          /* A blank box is not an override, it is "leave the menu price". */
-          invalid: typed !== '' && parsed === null,
-          aboveList: chargedCents > listCents,
-          changed: parsed !== null && parsed !== listCents,
-        },
-      ]
+        return [
+          {
+            key: variantId,
+            kind: 'menu' as const,
+            quantity,
+            itemName: variant.itemName,
+            sizeLabel: variant.sizeLabel,
+            listCents,
+            chargedCents,
+            lineListCents: listCents * quantity,
+            lineChargedCents: chargedCents * quantity,
+            /* A blank box is not an override, it is "leave the menu price". */
+            invalid: typed !== '' && parsed === null,
+            aboveList: chargedCents > listCents,
+            changed: parsed !== null && parsed !== listCents,
+          },
+        ]
+      },
+    )
+
+    /**
+     * A custom line has no menu price to be discounted from, so the number
+     * typed into it simply is the price. That keeps the breakdown honest: the
+     * "price change" figure stays a record of discounts against the menu and
+     * does not quietly absorb the cost of a one-off item.
+     */
+    const customLines: PriceLine[] = customItems.map((item) => {
+      const parsed = parseDollarsToCents(item.price)
+      const cents = parsed ?? 0
+
+      return {
+        key: item.id,
+        kind: 'custom' as const,
+        quantity: item.quantity,
+        itemName: item.name.trim() || 'Untitled item',
+        sizeLabel: 'Custom',
+        listCents: cents,
+        chargedCents: cents,
+        lineListCents: cents * item.quantity,
+        lineChargedCents: cents * item.quantity,
+        invalid: item.price.trim() === '' || parsed === null,
+        aboveList: false,
+        changed: false,
+      }
     })
+
+    const lines = [...menuLines, ...customLines]
 
     const subtotalCents = lines.reduce((sum, l) => sum + l.lineListCents, 0)
     const discountCents = lines.reduce(
@@ -175,10 +241,13 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
       totalCents: subtotalCents - discountCents,
       hasInvalid: lines.some((l) => l.invalid),
       hasAboveList: lines.some((l) => l.aboveList),
+      hasUnnamed: customItems.some((item) => item.name.trim() === ''),
     }
-  }, [quantities, variantIndex, priceOverrides])
+  }, [quantities, variantIndex, priceOverrides, customItems])
 
-  const itemCount = Object.values(quantities).reduce((a, b) => a + b, 0)
+  const itemCount =
+    Object.values(quantities).reduce((a, b) => a + b, 0) +
+    customItems.reduce((sum, item) => sum + item.quantity, 0)
   const paidCents = parseDollarsToCents(amountPaid) ?? 0
   const balanceCents = Math.max(pricing.totalCents - paidCents, 0)
 
@@ -206,6 +275,23 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
     setPriceOverrides((current) => ({ ...current, [variantId]: value }))
   }
 
+  function addCustomItem() {
+    setCustomItems((current) => [
+      ...current,
+      { id: nextCustomId(), name: '', price: '', quantity: 1 },
+    ])
+  }
+
+  function updateCustomItem(id: string, patch: Partial<Omit<CustomItem, 'id'>>) {
+    setCustomItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    )
+  }
+
+  function removeCustomItem(id: string) {
+    setCustomItems((current) => current.filter((item) => item.id !== id))
+  }
+
   function resetPrice(variantId: string) {
     setPriceOverrides((current) => {
       const updated = { ...current }
@@ -218,10 +304,17 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
     setFormError(null)
     setFieldErrors({})
 
-    const items = Object.entries(quantities).map(([variantId, quantity]) => ({
-      variantId,
-      quantity,
-    }))
+    const items = [
+      ...Object.entries(quantities).map(([variantId, quantity]) => ({
+        variantId,
+        quantity,
+      })),
+      ...customItems.map((item) => ({
+        name: item.name.trim(),
+        priceCents: parseDollarsToCents(item.price) ?? 0,
+        quantity: item.quantity,
+      })),
+    ]
 
     startTransition(async () => {
       const result = await createOrder({
@@ -608,15 +701,66 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
                 </div>
                 <ul className="divide-line/50 divide-y">
                   {pricing.lines.map((line) => (
-                    <li key={line.variantId} className="px-4 py-3">
+                    <li key={line.key} className="px-4 py-3">
                       <div className="flex items-baseline gap-2.5">
-                        <span className="tabular text-accent w-8 shrink-0 font-semibold">
-                          {line.quantity}×
-                        </span>
-                        <span className="min-w-0 flex-1 text-sm">
-                          {line.itemName}
-                          <span className="text-ink-faint"> · {line.sizeLabel}</span>
-                        </span>
+                        {line.kind === 'custom' ? (
+                          <span className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              aria-label={`Remove one ${line.itemName}`}
+                              onClick={() =>
+                                updateCustomItem(line.key, {
+                                  quantity: Math.max(1, line.quantity - 1),
+                                })
+                              }
+                              disabled={line.quantity <= 1}
+                              className="bg-surface-raised ring-line text-ink-muted hover:text-ink flex size-7 items-center justify-center rounded-md ring-1 transition disabled:opacity-30"
+                            >
+                              <Minus className="size-3.5" />
+                            </button>
+                            <span className="tabular text-accent w-5 text-center text-sm font-semibold">
+                              {line.quantity}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={`Add one ${line.itemName}`}
+                              onClick={() =>
+                                updateCustomItem(line.key, { quantity: line.quantity + 1 })
+                              }
+                              className="bg-accent text-accent-ink hover:bg-accent-strong flex size-7 items-center justify-center rounded-md transition"
+                            >
+                              <Plus className="size-3.5" />
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="tabular text-accent w-8 shrink-0 font-semibold">
+                            {line.quantity}×
+                          </span>
+                        )}
+                        {line.kind === 'custom' ? (
+                          <input
+                            aria-label="Item name"
+                            placeholder="What is it?"
+                            value={
+                              customItems.find((item) => item.id === line.key)?.name ??
+                              ''
+                            }
+                            onChange={(event) =>
+                              updateCustomItem(line.key, { name: event.target.value })
+                            }
+                            className={cn(
+                              'bg-surface-raised text-ink placeholder:text-ink-faint h-9 min-w-0 flex-1 rounded-lg px-2.5 text-sm ring-1 transition focus:ring-2 focus:outline-none',
+                              line.itemName === 'Untitled item'
+                                ? 'ring-rose-500'
+                                : 'ring-line focus:ring-accent',
+                            )}
+                          />
+                        ) : (
+                          <span className="min-w-0 flex-1 text-sm">
+                            {line.itemName}
+                            <span className="text-ink-faint"> · {line.sizeLabel}</span>
+                          </span>
+                        )}
                         <span className="tabular shrink-0 text-sm">
                           {line.changed && !line.aboveList && (
                             <span className="text-ink-faint mr-1.5 line-through">
@@ -629,17 +773,30 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
 
                       <div className="mt-2 flex items-center gap-2 pl-[2.625rem]">
                         <label
-                          htmlFor={`price-${line.variantId}`}
+                          htmlFor={`price-${line.key}`}
                           className="text-ink-faint shrink-0 text-xs"
                         >
                           Price each
                         </label>
                         <input
-                          id={`price-${line.variantId}`}
+                          id={`price-${line.key}`}
                           inputMode="decimal"
-                          placeholder={(line.listCents / 100).toFixed(2)}
-                          value={priceOverrides[line.variantId] ?? ''}
-                          onChange={(e) => setPrice(line.variantId, e.target.value)}
+                          placeholder={
+                            line.kind === 'custom'
+                              ? '0.00'
+                              : (line.listCents / 100).toFixed(2)
+                          }
+                          value={
+                            line.kind === 'custom'
+                              ? (customItems.find((item) => item.id === line.key)
+                                  ?.price ?? '')
+                              : (priceOverrides[line.key] ?? '')
+                          }
+                          onChange={(e) =>
+                            line.kind === 'custom'
+                              ? updateCustomItem(line.key, { price: e.target.value })
+                              : setPrice(line.key, e.target.value)
+                          }
                           className={cn(
                             'bg-surface-raised text-ink placeholder:text-ink-faint tabular h-10 w-24 shrink-0 rounded-lg px-2.5 text-base ring-1 transition focus:ring-2 focus:outline-none',
                             line.invalid || line.aboveList
@@ -648,22 +805,36 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
                           )}
                         />
                         <span className="text-ink-faint truncate text-xs">
-                          menu {formatCentsCompact(line.listCents)}
+                          {line.kind === 'custom'
+                            ? 'not on the menu'
+                            : `menu ${formatCentsCompact(line.listCents)}`}
                         </span>
-                        {line.changed && (
+                        {line.kind === 'custom' ? (
                           <button
                             type="button"
-                            onClick={() => resetPrice(line.variantId)}
-                            className="text-ink-faint hover:text-ink ml-auto shrink-0 text-xs underline"
+                            onClick={() => removeCustomItem(line.key)}
+                            className="text-ink-faint ml-auto shrink-0 text-xs underline hover:text-rose-400"
                           >
-                            Reset
+                            Remove
                           </button>
+                        ) : (
+                          line.changed && (
+                            <button
+                              type="button"
+                              onClick={() => resetPrice(line.key)}
+                              className="text-ink-faint hover:text-ink ml-auto shrink-0 text-xs underline"
+                            >
+                              Reset
+                            </button>
+                          )
                         )}
                       </div>
 
                       {line.invalid && (
                         <p className="mt-1.5 pl-[2.625rem] text-xs text-rose-400">
-                          Enter a price like 80 or 79.50
+                          {line.kind === 'custom'
+                            ? 'Give this item a price, like 25 or 12.50'
+                            : 'Enter a price like 80 or 79.50'}
                         </p>
                       )}
                       {line.aboveList && !line.invalid && (
@@ -676,6 +847,17 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
                     </li>
                   ))}
                 </ul>
+
+                <div className="border-line/60 border-t px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={addCustomItem}
+                    className="text-ink-muted hover:text-ink flex items-center gap-1.5 text-sm font-medium transition"
+                  >
+                    <Plus className="size-4" />
+                    Add an item that is not on the menu
+                  </button>
+                </div>
               </div>
 
               {/* The arithmetic, spelled out */}
@@ -755,7 +937,8 @@ export function OrderForm({ menu }: { menu: MenuWithVariants }) {
                     pending ||
                     itemCount === 0 ||
                     pricing.hasInvalid ||
-                    pricing.hasAboveList
+                    pricing.hasAboveList ||
+                    pricing.hasUnnamed
                   }
                 >
                   {pending && <Loader2 className="size-4 animate-spin" />}

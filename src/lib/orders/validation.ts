@@ -23,11 +23,34 @@ const clockTime = z
   .string()
   .regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Pick a service time')
 
-export const orderItemInputSchema = z.object({
+/** A line taken from the menu. Its price is looked up server-side. */
+export const menuItemInputSchema = z.object({
   variantId: z.uuid(),
   quantity: z.number().int().min(1).max(999),
   notes: z.string().max(280).optional(),
 })
+
+/**
+ * A one-off line that is not on the menu — a special request, a cake somebody
+ * asked for, a delivery surcharge.
+ *
+ * Its price arrives from the client, which is the one place in this app that
+ * happens: there is nowhere else it could come from, since the item exists
+ * nowhere but this order. That is acceptable only because taking an order
+ * requires the office passcode, so whoever types the price is whoever sets
+ * prices. Menu lines still ignore any price the client sends.
+ */
+export const customItemInputSchema = z.object({
+  name: z.string().trim().min(1, 'Give the item a name').max(120),
+  priceCents: z.number().int().min(0).max(1_000_000),
+  quantity: z.number().int().min(1).max(999),
+  notes: z.string().max(280).optional(),
+})
+
+export const orderItemInputSchema = z.union([
+  menuItemInputSchema,
+  customItemInputSchema,
+])
 
 export const createOrderSchema = z
   .object({

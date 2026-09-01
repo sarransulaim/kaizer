@@ -87,14 +87,22 @@ export async function createOrder(
         })
         .returning()
 
-      /* Resolve the variants in one query, then snapshot their name, size and
-         price onto the line items. Prices are read from the database, never
-         from the client payload. */
-      const variantIds = data.items.map((i) => i.variantId)
-      const variants = await tx.query.menuVariants.findMany({
-        where: inArray(menuVariants.id, variantIds),
-        with: { item: true },
-      })
+      /* Two kinds of line. A menu line names a variant and nothing else — its
+         price is read from the database, never from the client payload. A
+         custom line exists only on this order, so its name and price can only
+         have come from the operator, who needed the office passcode to get
+         this far. */
+      const menuLines = data.items.filter((line) => 'variantId' in line)
+      const customLines = data.items.filter((line) => 'name' in line)
+
+      const variantIds = menuLines.map((line) => line.variantId)
+      const variants =
+        variantIds.length > 0
+          ? await tx.query.menuVariants.findMany({
+              where: inArray(menuVariants.id, variantIds),
+              with: { item: true },
+            })
+          : []
 
       const variantMap = new Map(variants.map((v) => [v.id, v]))
       const missing = variantIds.filter((id) => !variantMap.has(id))
@@ -102,18 +110,32 @@ export async function createOrder(
         throw new Error('One of the selected menu items is no longer available')
       }
 
-      const lines = data.items.map((line) => {
-        const variant = variantMap.get(line.variantId)!
-        return {
-          menuVariantId: variant.id,
-          itemNameSnapshot: variant.item.name,
-          sizeLabelSnapshot: variant.sizeLabel,
-          unitPriceCents: variant.priceCents,
+      const lines = [
+        ...menuLines.map((line) => {
+          const variant = variantMap.get(line.variantId)!
+          return {
+            menuVariantId: variant.id,
+            itemNameSnapshot: variant.item.name,
+            sizeLabelSnapshot: variant.sizeLabel,
+            unitPriceCents: variant.priceCents,
+            quantity: line.quantity,
+            lineTotalCents: variant.priceCents * line.quantity,
+            notes: line.notes || null,
+          }
+        }),
+        ...customLines.map((line) => ({
+          /* No variant to point at. The reporting joins in analytics and the
+             prep sheet already left-join the menu, so a null here shows up as
+             an uncategorised line rather than dropping the row. */
+          menuVariantId: null,
+          itemNameSnapshot: line.name,
+          sizeLabelSnapshot: 'Custom',
+          unitPriceCents: line.priceCents,
           quantity: line.quantity,
-          lineTotalCents: variant.priceCents * line.quantity,
+          lineTotalCents: line.priceCents * line.quantity,
           notes: line.notes || null,
-        }
-      })
+        })),
+      ]
 
       const subtotalCents = lines.reduce((sum, l) => sum + l.lineTotalCents, 0)
       const discountCents = Math.min(data.discountCents, subtotalCents)
