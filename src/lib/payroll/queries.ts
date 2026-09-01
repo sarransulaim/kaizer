@@ -3,7 +3,7 @@ import 'server-only'
 import { and, asc, desc, eq, gte, isNotNull, isNull, lte } from 'drizzle-orm'
 
 import { db } from '@/lib/db'
-import { timeEntries, users } from '@/lib/db/schema'
+import { payrollPayments, timeEntries, users } from '@/lib/db/schema'
 import { weekDates } from '@/lib/time'
 
 import { minutesWorked, payCents } from './hours'
@@ -77,6 +77,14 @@ export type PayrollDay = {
   shifts: PayrollShift[]
 }
 
+/** What was actually handed over for a week, once it was settled. */
+export type PayrollPaid = {
+  paidAt: Date
+  amountCents: number
+  minutes: number
+  note: string | null
+}
+
 export type PayrollPerson = {
   id: string
   name: string
@@ -86,6 +94,7 @@ export type PayrollPerson = {
   totalMinutes: number
   payCents: number
   hasOpenShift: boolean
+  paid: PayrollPaid | null
 }
 
 export type PayrollWeek = {
@@ -94,7 +103,11 @@ export type PayrollWeek = {
   people: PayrollPerson[]
   totalMinutes: number
   totalPayCents: number
+  /** People with no hourly rate set, so their pay reads as nothing. */
   unpaidCount: number
+  /** Weeks already settled, and what is still owed for the rest. */
+  paidCount: number
+  owedCents: number
 }
 
 /**
@@ -109,7 +122,7 @@ export async function getPayrollWeek(mondayIso: string): Promise<PayrollWeek> {
   const dates = weekDates(mondayIso)
   const sunday = dates[dates.length - 1]
 
-  const [staff, entries] = await Promise.all([
+  const [staff, entries, payments] = await Promise.all([
     db
       .select({
         id: users.id,
@@ -136,7 +149,14 @@ export async function getPayrollWeek(mondayIso: string): Promise<PayrollWeek> {
         and(gte(timeEntries.workDate, mondayIso), lte(timeEntries.workDate, sunday)),
       )
       .orderBy(asc(timeEntries.clockInAt)),
+
+    db
+      .select()
+      .from(payrollPayments)
+      .where(eq(payrollPayments.weekStart, mondayIso)),
   ])
+
+  const paidByUser = new Map(payments.map((row) => [row.userId, row]))
 
   /* Anyone with hours in the week is included even if they have since been
      deactivated — a week's wages do not disappear because someone left. */
@@ -197,12 +217,27 @@ export async function getPayrollWeek(mondayIso: string): Promise<PayrollWeek> {
       totalMinutes,
       payCents: payCents(totalMinutes, person.hourlyRateCents),
       hasOpenShift: days.some((day) => day.shifts.some((shift) => shift.open)),
+      paid: (() => {
+        const row = paidByUser.get(person.id)
+        return row
+          ? {
+              paidAt: row.paidAt,
+              amountCents: row.amountCents,
+              minutes: row.minutes,
+              note: row.note,
+            }
+          : null
+      })(),
     }
   })
 
   /* Someone with no hours and no rate is just noise on the sheet. */
   const visible = people.filter(
-    (person) => person.totalMinutes > 0 || person.hourlyRateCents > 0 || person.hasOpenShift,
+    (person) =>
+      person.totalMinutes > 0 ||
+      person.hourlyRateCents > 0 ||
+      person.hasOpenShift ||
+      person.paid !== null,
   )
 
   return {
@@ -212,6 +247,11 @@ export async function getPayrollWeek(mondayIso: string): Promise<PayrollWeek> {
     totalMinutes: visible.reduce((sum, person) => sum + person.totalMinutes, 0),
     totalPayCents: visible.reduce((sum, person) => sum + person.payCents, 0),
     unpaidCount: visible.filter((person) => person.hourlyRateCents <= 0).length,
+    paidCount: visible.filter((person) => person.paid !== null).length,
+    /* What is still to hand over: everyone not yet settled. */
+    owedCents: visible
+      .filter((person) => person.paid === null)
+      .reduce((sum, person) => sum + person.payCents, 0),
   }
 }
 

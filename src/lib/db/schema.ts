@@ -340,6 +340,49 @@ export const timeEntries = pgTable(
   ],
 )
 
+/**
+ * One row per worker per week, written when the wages are actually handed over.
+ *
+ * It records the amount rather than just a flag, because the amount can stop
+ * matching. A forgotten punch-out corrected next Tuesday changes what the week
+ * computes to, and the payroll page would then show a total that was never the
+ * one paid. Storing what was paid, and the hours it covered, lets the
+ * difference be shown instead of silently rewriting history.
+ */
+export const payrollPayments = pgTable(
+  'payroll_payments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+
+    /** The Monday of the week being settled. */
+    weekStart: date('week_start').notNull(),
+
+    /** What was handed over, as computed at that moment. */
+    amountCents: integer('amount_cents').notNull(),
+    /** And the hours it covered, for the same reason. */
+    minutes: integer('minutes').notNull(),
+
+    note: text('note'),
+
+    markedById: uuid('marked_by_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    paidAt: timestamp('paid_at', { withTimezone: true }).notNull().defaultNow(),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /* A week can only be settled once. Marking it twice would be a
+       double payment on paper. */
+    unique('payroll_payments_user_week').on(t.userId, t.weekStart),
+    index('payroll_payments_week_idx').on(t.weekStart),
+  ],
+)
+
 /* -------------------------------------------------------------------------- */
 /*                                Audit trail                                 */
 /* -------------------------------------------------------------------------- */
@@ -469,6 +512,10 @@ export const timeEntriesRelations = relations(timeEntries, ({ one }) => ({
   user: one(users, { fields: [timeEntries.userId], references: [users.id] }),
 }))
 
+export const payrollPaymentsRelations = relations(payrollPayments, ({ one }) => ({
+  user: one(users, { fields: [payrollPayments.userId], references: [users.id] }),
+}))
+
 export const orderEventsRelations = relations(orderEvents, ({ one }) => ({
   order: one(orders, { fields: [orderEvents.orderId], references: [orders.id] }),
   actor: one(users, { fields: [orderEvents.actorId], references: [users.id] }),
@@ -487,6 +534,7 @@ export type Order = typeof orders.$inferSelect
 export type NewOrder = typeof orders.$inferInsert
 export type OrderItem = typeof orderItems.$inferSelect
 export type OrderEvent = typeof orderEvents.$inferSelect
+export type PayrollPayment = typeof payrollPayments.$inferSelect
 export type TimeEntry = typeof timeEntries.$inferSelect
 export type NewTimeEntry = typeof timeEntries.$inferInsert
 export type PushSubscription = typeof pushSubscriptions.$inferSelect

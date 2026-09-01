@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronDown, Loader2, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Loader2, Plus, Trash2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useState, useTransition } from 'react'
 
@@ -9,6 +9,8 @@ import {
   addEntry,
   closeOpenShift,
   deleteEntry,
+  markWeekPaid,
+  unmarkWeekPaid,
   updateEntry,
 } from '@/lib/payroll/actions'
 import { cn } from '@/lib/utils'
@@ -47,6 +49,12 @@ export type PersonView = {
   decimalLabel: string
   payLabel: string
   hasOpenShift: boolean
+  paid: {
+    amountLabel: string
+    atLabel: string
+    differs: boolean
+    currentLabel: string
+  } | null
   days: DayView[]
 }
 
@@ -62,12 +70,15 @@ export function Timesheet({
   dates,
   weekdays,
   today,
+  monday,
 }: {
   people: PersonView[]
   dates: string[]
   weekdays: string[]
   /** Today in the business timezone, as the latest shift that can be recorded. */
   today: string
+  /** The Monday of the week on screen, which a payment is recorded against. */
+  monday: string
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
 
@@ -93,6 +104,9 @@ export function Timesheet({
               </th>
               <th className="text-ink-muted px-4 py-2.5 text-right text-xs font-semibold tracking-wide uppercase">
                 Pay
+              </th>
+              <th className="text-ink-muted px-4 py-2.5 text-right text-xs font-semibold tracking-wide uppercase">
+                Paid
               </th>
             </tr>
           </thead>
@@ -145,6 +159,9 @@ export function Timesheet({
                 <td className="tabular px-4 py-3 text-right font-semibold">
                   {person.payLabel}
                 </td>
+                <td className="px-4 py-3 text-right">
+                  <PaidCell person={person} monday={monday} />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -157,6 +174,87 @@ export function Timesheet({
         ) : null,
       )}
     </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Whether this week has been settled for this person.
+ *
+ * Marking it stores the amount rather than a flag, so a shift corrected next
+ * week cannot silently restate what was handed over. When the two stop
+ * agreeing the cell says both numbers instead of picking one.
+ */
+function PaidCell({ person, monday }: { person: PersonView; monday: string }) {
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  function run(action: () => Promise<{ ok: boolean; error?: string }>) {
+    setError(null)
+    startTransition(async () => {
+      const result = await action()
+      if (!result.ok) {
+        setError(result.error ?? 'That did not work')
+        return
+      }
+      router.refresh()
+    })
+  }
+
+  if (person.paid) {
+    return (
+      <span className="inline-flex flex-col items-end gap-0.5">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => run(() => unmarkWeekPaid(person.id, monday))}
+          title="Undo this payment"
+          className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/25"
+        >
+          {pending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Check className="size-3.5" />
+          )}
+          {person.paid.amountLabel}
+        </button>
+        <span className="text-ink-faint text-[0.6875rem]">
+          {person.paid.atLabel}
+        </span>
+        {person.paid.differs && (
+          <span className="text-[0.6875rem] text-amber-400">
+            now {person.paid.currentLabel}
+          </span>
+        )}
+        {error && <span className="text-[0.6875rem] text-rose-400">{error}</span>}
+      </span>
+    )
+  }
+
+  return (
+    <span className="inline-flex flex-col items-end gap-0.5">
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        disabled={pending || person.hourlyRateCents <= 0}
+        onClick={() => run(() => markWeekPaid(person.id, monday))}
+        title={
+          person.hourlyRateCents <= 0
+            ? 'Set an hourly rate first'
+            : 'Record that this week has been paid'
+        }
+      >
+        {pending && <Loader2 className="size-4 animate-spin" />}
+        Mark paid
+      </Button>
+      {person.hasOpenShift && (
+        <span className="text-[0.6875rem] text-amber-400">shift still open</span>
+      )}
+      {error && <span className="text-[0.6875rem] text-rose-400">{error}</span>}
+    </span>
   )
 }
 

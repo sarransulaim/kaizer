@@ -6,7 +6,7 @@ import { revalidatePath } from 'next/cache'
 import { getCurrentActor } from '@/lib/actor'
 import { requireSession } from '@/lib/auth/guard'
 import { db } from '@/lib/db'
-import { timeEntries, users } from '@/lib/db/schema'
+import { payrollPayments, timeEntries, users } from '@/lib/db/schema'
 import { isValidPinFormat, verifyPin } from '@/lib/staff/pin'
 import {
   addDays,
@@ -19,7 +19,7 @@ import {
 } from '@/lib/time'
 
 import { minutesWorked } from './hours'
-import { getWeekBreakdownForUser, getWeekMinutesForUser } from './queries'
+import { getPayrollWeek, getWeekBreakdownForUser, getWeekMinutesForUser } from './queries'
 
 export type PunchDay = {
   date: string
@@ -332,6 +332,93 @@ export async function closeOpenShift(
   } catch (error) {
     console.error('[closeOpenShift]', error)
     return { ok: false, error: 'Could not close that shift' }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              Marking paid                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Settle one worker for one week.
+ *
+ * The amount and hours are read from the sheet and stored, rather than being
+ * recomputed whenever the page is opened. A shift corrected next week changes
+ * what the week is worth, and the record of what was actually handed over has
+ * to survive that — otherwise the page quietly rewrites a payment that already
+ * happened.
+ */
+export async function markWeekPaid(
+  userId: string,
+  weekStart: string,
+  note?: string,
+): Promise<EntryResult> {
+  if (!(await isAllowed())) return DENIED
+
+  try {
+    const actor = await getCurrentActor()
+    const week = await getPayrollWeek(weekStart)
+    const person = week.people.find((entry) => entry.id === userId)
+
+    if (!person) {
+      return { ok: false, error: 'That person has nothing on this week' }
+    }
+
+    await db
+      .insert(payrollPayments)
+      .values({
+        userId,
+        weekStart,
+        amountCents: person.payCents,
+        minutes: person.totalMinutes,
+        note: note?.trim() || null,
+        markedById: actor.id,
+      })
+      /* Marking an already-settled week again should refresh the figure
+         rather than fail, since the usual reason for doing it is that the
+         hours were corrected first. */
+      .onConflictDoUpdate({
+        target: [payrollPayments.userId, payrollPayments.weekStart],
+        set: {
+          amountCents: person.payCents,
+          minutes: person.totalMinutes,
+          note: note?.trim() || null,
+          markedById: actor.id,
+          paidAt: new Date(),
+          updatedAt: new Date(),
+        },
+      })
+
+    revalidatePath('/payroll')
+    return { ok: true }
+  } catch (error) {
+    console.error('[markWeekPaid]', error)
+    return { ok: false, error: 'Could not mark that as paid' }
+  }
+}
+
+/** Undo a payment marked by mistake. */
+export async function unmarkWeekPaid(
+  userId: string,
+  weekStart: string,
+): Promise<EntryResult> {
+  if (!(await isAllowed())) return DENIED
+
+  try {
+    await db
+      .delete(payrollPayments)
+      .where(
+        and(
+          eq(payrollPayments.userId, userId),
+          eq(payrollPayments.weekStart, weekStart),
+        ),
+      )
+
+    revalidatePath('/payroll')
+    return { ok: true }
+  } catch (error) {
+    console.error('[unmarkWeekPaid]', error)
+    return { ok: false, error: 'Could not undo that' }
   }
 }
 

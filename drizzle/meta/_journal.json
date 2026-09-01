@@ -22,6 +22,13 @@
       "when": 1788208701321,
       "tag": "0002_brief_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788233909536,
+      "tag": "0003_tearful_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

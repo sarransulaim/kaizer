@@ -8,6 +8,8 @@ import { decimalHours, formatMinutes } from '@/lib/payroll/hours'
 import { getPayrollWeek } from '@/lib/payroll/queries'
 import {
   addDays,
+  dateOf,
+  formatDate,
   formatInstantTime,
   instantToTimeValue,
   startOfWeek,
@@ -46,6 +48,17 @@ export default async function PayrollPage(props: PageProps<'/payroll'>) {
     decimalLabel: decimalHours(person.totalMinutes),
     payLabel: formatCentsCompact(person.payCents),
     hasOpenShift: person.hasOpenShift,
+    paid: person.paid
+      ? {
+          amountLabel: formatCentsCompact(person.paid.amountCents),
+          atLabel: formatDate(dateOf(person.paid.paidAt)),
+          /* The hours were corrected after the money changed hands, so the
+             sheet and the payment no longer agree. Say so rather than
+             showing one of the two numbers as if it were the truth. */
+          differs: person.paid.amountCents !== person.payCents,
+          currentLabel: formatCentsCompact(person.payCents),
+        }
+      : null,
     days: person.days.map((day) => ({
       date: day.date,
       weekday: weekdayShort(day.date),
@@ -101,7 +114,16 @@ export default async function PayrollPage(props: PageProps<'/payroll'>) {
           label="Payout"
           value={formatCentsCompact(week.totalPayCents)}
         />
-        <StatTile label="People" value={week.people.length} />
+        <StatTile
+          label="Still to pay"
+          value={formatCentsCompact(week.owedCents)}
+          tone={week.owedCents > 0 ? 'warning' : 'positive'}
+          hint={
+            week.paidCount > 0
+              ? `${week.paidCount} of ${week.people.length} settled`
+              : undefined
+          }
+        />
         <StatTile
           label="Open shifts"
           value={openShifts}
@@ -153,6 +175,7 @@ export default async function PayrollPage(props: PageProps<'/payroll'>) {
           dates={week.dates}
           weekdays={week.dates.map(weekdayShort)}
           today={today()}
+          monday={monday}
         />
       )}
     </div>
