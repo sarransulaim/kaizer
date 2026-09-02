@@ -18,7 +18,9 @@
     "db:studio": "drizzle-kit studio",
     "db:setup": "npm run db:migrate && npm run db:seed",
     "db:backup": "node scripts/backup.mjs",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
@@ -49,7 +51,8 @@
     "eslint-config-next": "16.3.2",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   },
   "allowScripts": {
     "esbuild@0.18.20": true,

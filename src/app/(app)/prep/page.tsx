@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { getOrdersForDate, getPrepSummary } from '@/lib/orders/queries'
 import { TERMINAL_STATUSES } from '@/lib/orders/status'
-import { dayLabel, formatDateLong, formatTime, today, upcomingDays } from '@/lib/time'
+import { dayLabel, formatDateLong, formatTime, isIsoDate, today, upcomingDays } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
@@ -23,7 +23,9 @@ export const metadata = { title: 'Prep' }
 export default async function PrepPage(props: PageProps<'/prep'>) {
   const params = await props.searchParams
   const requested = typeof params.date === 'string' ? params.date : undefined
-  const date = requested ?? today()
+  /* Anyone signed in can type this query string by hand, and an unparseable
+     date reached Postgres as a 500. Fall back to today instead. */
+  const date = isIsoDate(requested) ? requested : today()
 
   const [summary, orders] = await Promise.all([
     getPrepSummary(date),

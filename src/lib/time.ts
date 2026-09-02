@@ -13,6 +13,18 @@ const ZONE = BUSINESS.timezone
  * timezone. Nothing else in the app should be doing timezone arithmetic.
  */
 
+/**
+ * Whether a string is a real calendar date.
+ *
+ * Dates reach this app from query strings, which anyone signed in can type
+ * by hand. `2026-02-31` matches the shape and is not a date, so the pattern
+ * alone is not enough — Luxon's own validity check is the point.
+ */
+export function isIsoDate(value: string | undefined | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  return DateTime.fromISO(value, { zone: ZONE }).isValid
+}
+
 /** Today's calendar date in the business timezone, as `YYYY-MM-DD`. */
 export function today(): string {
   return DateTime.now().setZone(ZONE).toISODate()!
@@ -147,7 +159,9 @@ export function toTimeInputValue(timeStr: string): string {
  * how the payroll week is counted here — Monday through Sunday.
  */
 export function startOfWeek(isoDate?: string): string {
-  const base = isoDate
+  /* A nonsense `?week=` should show the current week rather than render a
+     sheet full of "Invalid DateTime". */
+  const base = isIsoDate(isoDate)
     ? DateTime.fromISO(isoDate, { zone: ZONE })
     : DateTime.now().setZone(ZONE)
   return base.startOf('week').toISODate()!
@@ -155,7 +169,9 @@ export function startOfWeek(isoDate?: string): string {
 
 /** The seven ISO dates of the week beginning on `mondayIso`. */
 export function weekDates(mondayIso: string): string[] {
-  const monday = DateTime.fromISO(mondayIso, { zone: ZONE })
+  const monday = isIsoDate(mondayIso)
+    ? DateTime.fromISO(mondayIso, { zone: ZONE })
+    : DateTime.now().setZone(ZONE).startOf('week')
   return Array.from({ length: 7 }, (_, i) => monday.plus({ days: i }).toISODate()!)
 }
 

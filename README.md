@@ -53,6 +53,7 @@ and the Push API require HTTPS or `localhost`, so a LAN IP will not work.
 | `npm run dev` | Development server |
 | `npm run dev:https` | Development over HTTPS, for push testing |
 | `npm run build` / `start` | Production build and serve |
+| `npm test` | Unit tests for money, hours and order state |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
 | `npm run db:generate` | Generate a migration from schema changes |
@@ -111,6 +112,36 @@ deposits, so "we sold $4,000" and "we have $4,000" are rarely the same number.
 Every revenue figure on `/analytics` says which one it is, and the gap between
 them is surfaced as outstanding rather than averaged away. Cancelled orders
 never count toward revenue — they are reported once, on their own.
+
+## Staying up
+
+**The pool must have an `error` listener.** `pg` emits `error` on the pool when
+an *idle* client fails — a Postgres restart, a maintenance window, a dropped
+link. An `error` event with no listener is an uncaught exception, and the whole
+server goes down because a connection nobody was using broke. The pool discards
+the bad client itself, so logging is all that is needed; severing every
+connection with `pg_terminate_backend` now leaves the app serving normally.
+
+**Every page has somewhere to fall back to.** `(app)/error.tsx` offers a retry,
+because a failed query is usually a momentary blip. `kitchen/error.tsx` retries
+by itself on a countdown — nobody is standing at a wall display to tap a button.
+`global-error.tsx` styles itself inline, since it is what renders when the root
+layout is what failed.
+
+**Dates and ids from the URL are validated before they reach Postgres.** Anyone
+signed in can type a query string, and `/orders/not-a-uuid` and `/prep?date=oops`
+were both 500s. A bad date now falls back to today or to the current week; a
+malformed id is a 404.
+
+**The realtime feed is capped.** Each subscriber holds a Postgres connection
+outside the query pool, because `LISTEN` claims a session. Postgres allows 100,
+so an unbounded feed is a way to lock the app out of its own database; past the
+cap a subscriber is refused and falls back to periodic refresh.
+
+**`npm test` covers the arithmetic.** Money, hours and the order state machine
+are pure functions where a mistake is expensive rather than merely visible — a
+rounding error in `payCents` underpays somebody every week. The suite runs in
+well under a second and needs no database.
 
 **The app is split in two, and the split is enforced.**
 

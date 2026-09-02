@@ -106,7 +106,16 @@ export async function getOverdueOrders() {
   })
 }
 
+/**
+ * A UUID as Postgres spells it. Order ids arrive from the URL, and a mistyped
+ * one used to reach the database and come back as a 500 rather than a 404.
+ */
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function getOrderById(id: string) {
+  if (!UUID_PATTERN.test(id)) return undefined
+
   return db.query.orders.findFirst({
     where: eq(orders.id, id),
     with: {

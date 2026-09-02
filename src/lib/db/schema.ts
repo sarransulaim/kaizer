@@ -281,7 +281,12 @@ export const orderItems = pgTable(
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('order_items_order_idx').on(t.orderId)],
+  (t) => [
+    index('order_items_order_idx').on(t.orderId),
+    /* Postgres does not index a foreign key on its own, and both the prep
+       sheet and analytics left-join through this column to reach the menu. */
+    index('order_items_variant_idx').on(t.menuVariantId),
+  ],
 )
 
 /* -------------------------------------------------------------------------- */

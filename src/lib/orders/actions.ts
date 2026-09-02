@@ -37,6 +37,7 @@ function revalidateOrderViews(orderId?: string) {
   revalidatePath('/')
   revalidatePath('/prep')
   revalidatePath('/kitchen')
+  revalidatePath('/analytics')
   if (orderId) revalidatePath(`/orders/${orderId}`)
 }
 

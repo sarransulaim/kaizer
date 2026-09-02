@@ -7,6 +7,22 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 /**
+ * How many live subscribers this process will carry.
+ *
+ * Each one holds a Postgres connection of its own, outside the query pool,
+ * because LISTEN claims a session for as long as it is open. Postgres allows
+ * 100 connections in total, so an unbounded feed is a way to lock the app out
+ * of its own database — every page would begin failing because a few phones
+ * left tabs open.
+ *
+ * Refusing the surplus is the mild failure: the realtime layer is a
+ * convenience, and a client that cannot subscribe still refreshes on its own.
+ */
+const MAX_SUBSCRIBERS = 40
+
+let subscribers = 0
+
+/**
  * Server-Sent Events feed of order changes.
  *
  * Each connected client gets its own Postgres connection parked on
@@ -23,34 +39,60 @@ export async function GET(request: Request) {
     return new Response('DATABASE_URL not configured', { status: 500 })
   }
 
+  if (subscribers >= MAX_SUBSCRIBERS) {
+    console.warn(`[stream] refusing subscriber, ${subscribers} already open`)
+    return new Response('Too many live connections', {
+      status: 503,
+      headers: { 'Retry-After': '30' },
+    })
+  }
+
   const encoder = new TextEncoder()
   let client: Client | null = null
   let heartbeat: ReturnType<typeof setInterval> | null = null
 
+  /**
+   * Teardown state lives out here rather than inside `start`, because a stream
+   * can end two ways — the request aborting, or the runtime calling `cancel` —
+   * and both have to release the same connection and the same slot. Counting a
+   * subscriber down in only one of those paths leaks a slot every time the
+   * other one fires, and the feed would eventually refuse everybody.
+   */
+  let released = false
+
+  const release = async () => {
+    if (released) return
+    released = true
+
+    subscribers = Math.max(0, subscribers - 1)
+
+    if (heartbeat) clearInterval(heartbeat)
+    try {
+      await client?.end()
+    } catch {
+      /* connection already gone */
+    }
+  }
+
+  subscribers += 1
+
   const stream = new ReadableStream({
     async start(controller) {
-      let closed = false
-
       const send = (event: string, data: unknown) => {
-        if (closed) return
+        if (released) return
         try {
           controller.enqueue(
             encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
           )
         } catch {
-          closed = true
+          void close()
         }
       }
 
-      const cleanup = async () => {
-        if (closed) return
-        closed = true
-        if (heartbeat) clearInterval(heartbeat)
-        try {
-          await client?.end()
-        } catch {
-          /* connection already gone */
-        }
+      const close = async () => {
+        const alreadyReleased = released
+        await release()
+        if (alreadyReleased) return
         try {
           controller.close()
         } catch {
@@ -67,7 +109,7 @@ export async function GET(request: Request) {
 
       client.on('error', (error) => {
         console.error('[stream] postgres client error', error)
-        void cleanup()
+        void close()
       })
 
       client.on('notification', (message) => {
@@ -84,7 +126,7 @@ export async function GET(request: Request) {
         await client.query(`LISTEN ${ORDERS_CHANNEL}`)
       } catch (error) {
         console.error('[stream] failed to subscribe', error)
-        await cleanup()
+        await close()
         return
       }
 
@@ -94,24 +136,19 @@ export async function GET(request: Request) {
          connections after ~60s; this keeps the pipe warm without producing an
          event the client has to handle. */
       heartbeat = setInterval(() => {
-        if (closed) return
+        if (released) return
         try {
           controller.enqueue(encoder.encode(': ping\n\n'))
         } catch {
-          void cleanup()
+          void close()
         }
       }, 25_000)
 
-      request.signal.addEventListener('abort', () => void cleanup())
+      request.signal.addEventListener('abort', () => void close())
     },
 
     async cancel() {
-      if (heartbeat) clearInterval(heartbeat)
-      try {
-        await client?.end()
-      } catch {
-        /* already closed */
-      }
+      await release()
     },
   })
 
