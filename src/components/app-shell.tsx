@@ -35,7 +35,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     <RealtimeProvider>
       <div className="flex min-h-full flex-col lg:flex-row">
         {/* Desktop sidebar */}
-        <aside className="ring-line/60 hidden w-56 shrink-0 flex-col gap-1 p-4 ring-1 lg:flex">
+        {/*
+          Pinned to the viewport rather than stretched down the page.
+
+          As an ordinary flex child the sidebar took the height of the whole
+          document: its divider stopped partway down a short page like the
+          prep sheet, ran two thousand pixels down a long one, and scrolled
+          the navigation out of reach on the way. One screen tall and stuck
+          there means it looks and behaves the same on every page.
+        */}
+        <aside className="ring-line/60 sticky top-0 hidden h-dvh w-56 shrink-0 flex-col gap-1 overflow-y-auto p-4 ring-1 lg:flex">
           <div className="mb-6 px-2">
             <div className="text-lg font-semibold tracking-tight">{BUSINESS.name}</div>
             <div className="text-ink-faint text-xs">{BUSINESS.tagline}</div>

@@ -35,6 +35,13 @@
   html {
     background-color: var(--color-canvas);
     color-scheme: dark;
+    /*
+      Always reserve the scrollbar's width, whether or not the page needs one.
+      Without this, a short page like the prep sheet has no scrollbar and a long
+      one does, so the centred content shifts several pixels sideways as you move
+      between them — which reads as the whole layout twitching.
+    */
+    scrollbar-gutter: stable;
     /* Stops iOS zooming the page when a form field is focused. */
     -webkit-text-size-adjust: 100%;
   }

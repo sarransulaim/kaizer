@@ -82,8 +82,12 @@ export default async function PayrollPage(props: PageProps<'/payroll'>) {
 
   const openShifts = people.filter((person) => person.hasOpenShift).length
 
+  /* The container is the same width as every other page. It was max-w-5xl,
+     which made the content jump 256px when you navigated here and read as
+     the sidebar shifting. The timesheet scrolls its own days horizontally. */
+
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-5 lg:py-8">
+    <div className="mx-auto w-full max-w-3xl px-4 py-5 lg:py-8">
       <header className="mb-5">
         <h1 className="text-2xl font-semibold tracking-tight">Payroll</h1>
         <p className="text-ink-faint text-sm">
