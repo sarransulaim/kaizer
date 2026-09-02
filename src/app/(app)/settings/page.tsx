@@ -1,12 +1,12 @@
-import { ShieldCheck } from 'lucide-react'
-
 import { PushManager } from '@/components/push-manager'
 import { MenuEditor } from '@/components/settings/menu-editor'
+import { PasscodePanel } from '@/components/settings/passcode-panel'
 import { SignOutButton } from '@/components/settings/sign-out-button'
 import { StaffManager, type StaffView } from '@/components/settings/staff-manager'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import { BUSINESS } from '@/lib/config'
 import { getMenuForAdmin } from '@/lib/menu/queries'
+import { secretKeyConfigured } from '@/lib/auth/passcode'
 import { getStaff } from '@/lib/staff/queries'
 
 export const dynamic = 'force-dynamic'
@@ -15,6 +15,7 @@ export const metadata = { title: 'Settings' }
 
 export default async function SettingsPage() {
   const [menu, staff] = await Promise.all([getMenuForAdmin(), getStaff()])
+  const secretKeyReady = secretKeyConfigured()
   const staffView: StaffView[] = staff
 
   return (
@@ -64,26 +65,11 @@ export default async function SettingsPage() {
             <CardTitle>Access</CardTitle>
           </CardHeader>
           <CardBody className="space-y-4">
-            <div className="flex gap-3">
-              <ShieldCheck className="mt-0.5 size-5 shrink-0 text-emerald-400" />
-              <div className="space-y-2 text-sm">
-                <p className="font-medium">This side is passcode protected</p>
-                <p className="text-ink-muted">
-                  Orders, analytics, payroll and these settings all sit behind
-                  the shared passcode. The kitchen display at{' '}
-                  <code className="text-ink-muted">/kitchen</code> stays open so
-                  the tablet and the workers&apos; phones need no login — they
-                  get the order board and the time clock, and nothing else.
-                </p>
-                <p className="text-ink-faint text-xs">
-                  Change the passcode by setting APP_PASSCODE in the Railway
-                  dashboard. Everyone signed in stays signed in; changing
-                  AUTH_SECRET instead signs everyone out.
-                </p>
-              </div>
-            </div>
+            <PasscodePanel secretKeyConfigured={secretKeyReady} />
 
-            <SignOutButton />
+            <div className="border-line/60 border-t pt-4">
+              <SignOutButton />
+            </div>
           </CardBody>
         </Card>
       </div>

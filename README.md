@@ -157,8 +157,16 @@ Every office-side action therefore checks the session itself. The two
 deliberately left open are `updateOrderStatus`, which is the entire point of the
 kitchen display, and `punch`, which is guarded by the worker's PIN instead.
 
-Set `APP_PASSCODE` to change the passcode; changing `AUTH_SECRET` signs every
-device out.
+`APP_PASSCODE` is the starting passcode. Changing it afterwards happens in
+Settings and needs two things: the current passcode, and `PASSCODE_SECRET_KEY`
+from the environment. The passcode is shared with whoever helps run the office,
+so on its own it must not be enough to replace itself — otherwise anyone holding
+it could lock the owner out. Once changed, the new passcode is stored as a
+scrypt hash in `app_settings` and takes precedence over the environment, so it
+is never sitting in a dashboard in plain text and changing it needs no redeploy.
+
+Devices already signed in stay signed in through a passcode change; rotating
+`AUTH_SECRET` is what signs everyone out.
 
 **Hours are counted in whole minutes, pay in integer cents.** Every hour is paid
 at the worker's flat rate — `payCents` in `lib/payroll/hours.ts` is the only
