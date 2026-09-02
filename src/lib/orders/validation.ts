@@ -104,3 +104,58 @@ export const updatePaymentSchema = z.object({
   paymentMethod: z.enum(paymentMethodEnum.enumValues).optional(),
   paymentRef: z.string().trim().max(200).optional(),
 })
+
+/* -------------------------------------------------------------------------- */
+/*                              Editing an order                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Everything about an order that is not its items or its money.
+ *
+ * Orders arrive over WhatsApp and change over WhatsApp — a time moves, a pickup
+ * becomes a delivery — so these have to be editable after the fact rather than
+ * only at the moment the order is taken.
+ */
+export const updateOrderDetailsSchema = z
+  .object({
+    orderId: z.uuid(),
+    customerName: z.string().trim().min(1, 'Name is required').max(120),
+    phone: z.string().trim().refine(isValidPhone, 'Enter a 10-digit phone number'),
+    channel: z.enum(orderChannelEnum.enumValues),
+    fulfillmentType: z.enum(fulfillmentTypeEnum.enumValues),
+    serviceDate: isoDate,
+    serviceTime: clockTime,
+    deliveryAddress: z.string().trim().max(500).optional(),
+    notes: z.string().trim().max(2000).optional(),
+    customerNotes: z.string().trim().max(2000).optional(),
+  })
+  .refine(
+    (data) =>
+      data.fulfillmentType !== 'delivery' ||
+      (data.deliveryAddress?.trim().length ?? 0) > 0,
+    {
+      message: 'A delivery address is required for delivery orders',
+      path: ['deliveryAddress'],
+    },
+  )
+
+export type UpdateOrderDetailsInput = z.input<typeof updateOrderDetailsSchema>
+
+/**
+ * The line items, replaced wholesale rather than patched.
+ *
+ * An edit is "here is what the order is now", which is how the operator thinks
+ * about it after a phone call. Working out a diff of adds, removes and quantity
+ * changes would be more code for the same result.
+ */
+export const updateOrderItemsSchema = z.object({
+  orderId: z.uuid(),
+  items: z.array(orderItemInputSchema).min(1, 'An order needs at least one item'),
+  discountCents: z.number().int().min(0).default(0),
+})
+
+export type UpdateOrderItemsInput = z.input<typeof updateOrderItemsSchema>
+
+export const deleteOrderSchema = z.object({
+  orderId: z.uuid(),
+})

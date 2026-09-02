@@ -10,13 +10,18 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 
 import { CancelButton } from '@/components/orders/cancel-button'
+import {
+  DeleteOrderButton,
+  EditOrderDetails,
+  EditOrderItems,
+} from '@/components/orders/order-editor'
 import { PaymentPanel } from '@/components/orders/payment-panel'
 import { StatusButton } from '@/components/orders/status-button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card'
 import type { FulfillmentType } from '@/lib/db/schema'
 import { formatCents, formatCentsCompact } from '@/lib/money'
-import { getOrderById } from '@/lib/orders/queries'
+import { getMenu, getOrderById } from '@/lib/orders/queries'
 import {
   FULFILLMENT_LABELS,
   PAYMENT_STATUS_LABELS,
@@ -26,7 +31,7 @@ import {
   TERMINAL_STATUSES,
 } from '@/lib/orders/status'
 import { formatPhone, toTelHref } from '@/lib/phone'
-import { dayLabel, formatDateLong, formatTime } from '@/lib/time'
+import { dayLabel, formatDateLong, formatTime, toTimeInputValue } from '@/lib/time'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +49,7 @@ export async function generateMetadata(props: PageProps<'/orders/[id]'>) {
 
 export default async function OrderDetailPage(props: PageProps<'/orders/[id]'>) {
   const { id } = await props.params
-  const order = await getOrderById(id)
+  const [order, menu] = await Promise.all([getOrderById(id), getMenu()])
 
   if (!order) notFound()
 
@@ -89,6 +94,17 @@ export default async function OrderDetailPage(props: PageProps<'/orders/[id]'>) 
         </div>
       )}
 
+      {/* Permanent removal sits apart from the buttons used during service,
+          and below them, because cancelling is nearly always the right
+          choice and this one cannot be undone. */}
+      <div className="mb-5">
+        <DeleteOrderButton
+          orderId={order.id}
+          orderNumber={order.orderNumber}
+          amountPaidCents={order.amountPaidCents}
+        />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2">
         {/* --------------------------- Details --------------------------- */}
         <Card>
@@ -124,6 +140,21 @@ export default async function OrderDetailPage(props: PageProps<'/orders/[id]'>) 
                 </span>
               </Row>
             )}
+
+            <EditOrderDetails
+              order={{
+                orderId: order.id,
+                customerName: order.customer.name,
+                phone: order.customer.phone,
+                channel: order.channel,
+                fulfillmentType: order.fulfillmentType,
+                serviceDate: order.serviceDate,
+                serviceTime: toTimeInputValue(order.serviceTime),
+                deliveryAddress: order.deliveryAddress ?? '',
+                notes: order.notes ?? '',
+                customerNotes: order.customerNotes ?? '',
+              }}
+            />
           </CardBody>
         </Card>
 
@@ -204,6 +235,19 @@ export default async function OrderDetailPage(props: PageProps<'/orders/[id]'>) 
                 <span className="tabular">{formatCents(order.totalCents)}</span>
               </div>
             </div>
+
+            <EditOrderItems
+              orderId={order.id}
+              discountCents={order.discountCents}
+              menu={menu}
+              lines={order.items.map((item) => ({
+                variantId: item.menuVariantId,
+                itemName: item.itemNameSnapshot,
+                sizeLabel: item.sizeLabelSnapshot,
+                unitPriceCents: item.unitPriceCents,
+                quantity: item.quantity,
+              }))}
+            />
           </CardBody>
         </Card>
 
