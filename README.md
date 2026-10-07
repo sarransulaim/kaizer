@@ -98,14 +98,14 @@ grouping and filtering use. `service_at` is the absolute instant, computed on
 write, and is what sorting and prep alerts use — so a 6pm Saturday pickup stays
 6pm across a DST transition.
 
-**Auth is off but the seams are in.** `users` and `roles` exist, and every
-write resolves an actor through `getCurrentActor()` and stamps it onto the
-audit trail. Turning auth on means building a login screen and pointing that
-one function at a session — no migration, no backfill, and no months of blank
-history.
-
-⚠️ **There is currently no login.** Anyone with the URL can read and edit every
-order, including customer names and phone numbers.
+**Access today, per-person roles next.** The office side sits behind one
+shared passcode and the kitchen side is open — see "The app is split in two"
+below. Per-person logins are the next stage, and the seams are already in:
+`users` carries a `role`, and every write resolves an actor through
+`getCurrentActor()` and stamps it onto the audit trail. Today that actor is the
+owner account, so the history is complete from the first order. Switching to
+per-person logins means pointing that one function at a session and filling in
+`requireRole()` — no migration, no backfill, and no months of blank history.
 
 **Booked and collected are reported separately.** A catering book runs on
 deposits, so "we sold $4,000" and "we have $4,000" are rarely the same number.
