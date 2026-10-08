@@ -1,6 +1,6 @@
 'use client'
 
-import { BarChart3, ChefHat, ClipboardList, Clock, LayoutDashboard, Plus, Settings } from 'lucide-react'
+import { BarChart3, ChefHat, ClipboardList, Clock, LayoutDashboard, Package, Plus, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
@@ -14,6 +14,7 @@ const NAV = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/prep', label: 'Prep', icon: ClipboardList },
   { href: '/kitchen', label: 'Kitchen', icon: ChefHat },
+  { href: '/inventory', label: 'Inventory', icon: Package },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/payroll', label: 'Payroll', icon: Clock },
   { href: '/settings', label: 'Settings', icon: Settings },
@@ -106,7 +107,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         {/* Mobile bottom tabs */}
         <nav className="bg-canvas/90 ring-line/60 pb-safe fixed inset-x-0 bottom-0 z-20 ring-1 backdrop-blur lg:hidden">
-          <div className="grid grid-cols-6">
+          <div className="no-scrollbar flex overflow-x-auto">
             {NAV.map(({ href, label, icon: Icon }) => {
               const active = isActive(pathname, href)
               return (
@@ -114,7 +115,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   key={href}
                   href={href}
                   className={cn(
-                    'flex h-16 flex-col items-center justify-center gap-1 text-[0.6875rem] transition',
+                    'flex h-16 min-w-[4.75rem] shrink-0 flex-1 flex-col items-center justify-center gap-1 text-[0.6875rem] transition',
                     active ? 'text-accent' : 'text-ink-faint',
                   )}
                 >

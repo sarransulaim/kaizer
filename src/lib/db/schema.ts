@@ -389,6 +389,222 @@ export const payrollPayments = pgTable(
 )
 
 /* -------------------------------------------------------------------------- */
+/*                                 Inventory                                  */
+/* -------------------------------------------------------------------------- */
+
+export const ingredientCategoryEnum = pgEnum('ingredient_category', [
+  'produce',
+  'meat',
+  'dairy',
+  'dry_goods',
+  'spices',
+  'packaging',
+  'other',
+])
+
+/**
+ * Something the kitchen buys and uses, for the restaurant and the catering side
+ * alike — one store room, one list.
+ *
+ * The two units are the point of this table. Restaurant Depot sells chicken by
+ * the 40lb case and Subzi Mandi sells basmati by the 20kg bag, but a recipe
+ * wants pounds and kilos, and so does a count. An ingredient that carries only
+ * one of those silently makes every cost figure wrong by whatever the pack size
+ * happens to be, and nothing on screen says so.
+ */
+export const ingredients = pgTable(
+  'ingredients',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    category: ingredientCategoryEnum('category').notNull().default('other'),
+
+    /** What it is counted and cooked in: kg, lb, L, each. */
+    stockUnit: text('stock_unit').notNull(),
+    /** What it is bought as: case, bag, box, each. */
+    purchaseUnit: text('purchase_unit').notNull(),
+    /**
+     * How many stock units come in one purchase unit — 40 for a 40lb case.
+     * Stored in thousandths so a 2.5kg tin or a 1/3 case is exact rather than
+     * rounded into a slow drift across a month of deliveries.
+     */
+    stockPerPurchaseMilli: integer('stock_per_purchase_milli').notNull().default(1000),
+
+    /** Most recent cost per stock unit, kept current by each delivery logged. */
+    lastCostCents: integer('last_cost_cents').notNull().default(0),
+
+    /** Hold at least this much, in stock units. Zero means "not tracked". */
+    parLevelMilli: integer('par_level_milli').notNull().default(0),
+
+    supplier: text('supplier'),
+    notes: text('notes'),
+    active: boolean('active').notNull().default(true),
+    sortOrder: integer('sort_order').notNull().default(0),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('ingredients_name_unique').on(t.name),
+    index('ingredients_category_idx').on(t.category, t.sortOrder),
+  ],
+)
+
+/**
+ * A delivery, as it appears on the invoice.
+ *
+ * Kept as a header with lines rather than loose rows so a Restaurant Depot
+ * receipt can be entered as it reads, and so a mis-keyed delivery can be found
+ * and corrected as one thing.
+ */
+export const purchases = pgTable(
+  'purchases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    supplier: text('supplier').notNull(),
+    purchasedOn: date('purchased_on').notNull(),
+    /** Invoice or receipt number, so a line can be traced back to paper. */
+    reference: text('reference'),
+    totalCents: integer('total_cents').notNull().default(0),
+    note: text('note'),
+    createdById: uuid('created_by_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('purchases_date_idx').on(t.purchasedOn)],
+)
+
+export const purchaseLines = pgTable(
+  'purchase_lines',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    purchaseId: uuid('purchase_id')
+      .notNull()
+      .references(() => purchases.id, { onDelete: 'cascade' }),
+    ingredientId: uuid('ingredient_id')
+      .notNull()
+      .references(() => ingredients.id, { onDelete: 'restrict' }),
+
+    /** How many purchase units arrived — 2 cases, in thousandths. */
+    quantityMilli: integer('quantity_milli').notNull(),
+    /** What one purchase unit cost, so the invoice can be checked against it. */
+    unitCostCents: integer('unit_cost_cents').notNull(),
+    lineTotalCents: integer('line_total_cents').notNull(),
+
+    /**
+     * Stock units received, resolved at the time of the delivery. Snapshotted
+     * rather than derived, for the same reason an order line keeps its price:
+     * changing an ingredient's pack size later must not silently restate what
+     * was received in August.
+     */
+    stockQuantityMilli: integer('stock_quantity_milli').notNull(),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('purchase_lines_purchase_idx').on(t.purchaseId),
+    index('purchase_lines_ingredient_idx').on(t.ingredientId),
+  ],
+)
+
+/**
+ * A stocktake: what was actually on the shelf, counted by hand.
+ *
+ * This is the backbone of the whole thing. Without a point of sale feeding
+ * every plate served, what the restaurant used can only be inferred —
+ * opening count, plus deliveries, minus what is left — and each count resets
+ * the arithmetic to something somebody physically saw.
+ *
+ * `salesSinceLastCents` is asked for at the same moment because it is the other
+ * half of a food cost percentage, and the person doing the count is the person
+ * who can read it off the Square report.
+ */
+export const inventoryCounts = pgTable(
+  'inventory_counts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    countedOn: date('counted_on').notNull(),
+    /** Takings for the period this count closes, entered by hand for now. */
+    salesSinceLastCents: integer('sales_since_last_cents'),
+    note: text('note'),
+    countedById: uuid('counted_by_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique('inventory_counts_date_unique').on(t.countedOn)],
+)
+
+export const inventoryCountLines = pgTable(
+  'inventory_count_lines',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    countId: uuid('count_id')
+      .notNull()
+      .references(() => inventoryCounts.id, { onDelete: 'cascade' }),
+    ingredientId: uuid('ingredient_id')
+      .notNull()
+      .references(() => ingredients.id, { onDelete: 'restrict' }),
+
+    /** On the shelf, in stock units, in thousandths. */
+    quantityMilli: integer('quantity_milli').notNull(),
+    /** Cost per stock unit at the time, so the count can be valued later. */
+    costCentsSnapshot: integer('cost_cents_snapshot').notNull().default(0),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('inventory_count_lines_unique').on(t.countId, t.ingredientId),
+    index('inventory_count_lines_ingredient_idx').on(t.ingredientId),
+  ],
+)
+
+export const wasteReasonEnum = pgEnum('waste_reason', [
+  'spoiled',
+  'overproduced',
+  'burnt',
+  'dropped',
+  'returned',
+  'other',
+])
+
+/**
+ * Food thrown away, logged against the same ingredient list.
+ *
+ * Waste that is never written down turns up anyway — as a gap between what the
+ * recipes say should have been used and what the count says was used — but by
+ * then it is indistinguishable from over-portioning or theft. Logging it is
+ * what keeps that gap meaningful.
+ */
+export const wasteEntries = pgTable(
+  'waste_entries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ingredientId: uuid('ingredient_id')
+      .notNull()
+      .references(() => ingredients.id, { onDelete: 'restrict' }),
+
+    quantityMilli: integer('quantity_milli').notNull(),
+    /** Valued when logged, so a later price change cannot rewrite the loss. */
+    costCents: integer('cost_cents').notNull().default(0),
+
+    reason: wasteReasonEnum('reason').notNull().default('other'),
+    note: text('note'),
+    wastedOn: date('wasted_on').notNull(),
+
+    recordedById: uuid('recorded_by_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('waste_entries_date_idx').on(t.wastedOn),
+    index('waste_entries_ingredient_idx').on(t.ingredientId),
+  ],
+)
+
+/* -------------------------------------------------------------------------- */
 /*                                Audit trail                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -517,6 +733,52 @@ export const timeEntriesRelations = relations(timeEntries, ({ one }) => ({
   user: one(users, { fields: [timeEntries.userId], references: [users.id] }),
 }))
 
+export const ingredientsRelations = relations(ingredients, ({ many }) => ({
+  purchaseLines: many(purchaseLines),
+  countLines: many(inventoryCountLines),
+  waste: many(wasteEntries),
+}))
+
+export const purchasesRelations = relations(purchases, ({ many }) => ({
+  lines: many(purchaseLines),
+}))
+
+export const purchaseLinesRelations = relations(purchaseLines, ({ one }) => ({
+  purchase: one(purchases, {
+    fields: [purchaseLines.purchaseId],
+    references: [purchases.id],
+  }),
+  ingredient: one(ingredients, {
+    fields: [purchaseLines.ingredientId],
+    references: [ingredients.id],
+  }),
+}))
+
+export const inventoryCountsRelations = relations(inventoryCounts, ({ many }) => ({
+  lines: many(inventoryCountLines),
+}))
+
+export const inventoryCountLinesRelations = relations(
+  inventoryCountLines,
+  ({ one }) => ({
+    count: one(inventoryCounts, {
+      fields: [inventoryCountLines.countId],
+      references: [inventoryCounts.id],
+    }),
+    ingredient: one(ingredients, {
+      fields: [inventoryCountLines.ingredientId],
+      references: [ingredients.id],
+    }),
+  }),
+)
+
+export const wasteEntriesRelations = relations(wasteEntries, ({ one }) => ({
+  ingredient: one(ingredients, {
+    fields: [wasteEntries.ingredientId],
+    references: [ingredients.id],
+  }),
+}))
+
 export const payrollPaymentsRelations = relations(payrollPayments, ({ one }) => ({
   user: one(users, { fields: [payrollPayments.userId], references: [users.id] }),
 }))
@@ -539,6 +801,15 @@ export type Order = typeof orders.$inferSelect
 export type NewOrder = typeof orders.$inferInsert
 export type OrderItem = typeof orderItems.$inferSelect
 export type OrderEvent = typeof orderEvents.$inferSelect
+export type Ingredient = typeof ingredients.$inferSelect
+export type NewIngredient = typeof ingredients.$inferInsert
+export type Purchase = typeof purchases.$inferSelect
+export type PurchaseLine = typeof purchaseLines.$inferSelect
+export type InventoryCount = typeof inventoryCounts.$inferSelect
+export type InventoryCountLine = typeof inventoryCountLines.$inferSelect
+export type WasteEntry = typeof wasteEntries.$inferSelect
+export type IngredientCategory = (typeof ingredientCategoryEnum.enumValues)[number]
+export type WasteReason = (typeof wasteReasonEnum.enumValues)[number]
 export type PayrollPayment = typeof payrollPayments.$inferSelect
 export type TimeEntry = typeof timeEntries.$inferSelect
 export type NewTimeEntry = typeof timeEntries.$inferInsert
